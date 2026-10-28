@@ -1,0 +1,6 @@
+{
+  "name": "ScanF",
+  "description": "ScanF - Sistema industrial de escaneo QR para handhelds Zebra TC26 con sincronización automática a SharePoint Excel vía Power Automate.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

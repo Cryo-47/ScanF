@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="128" fill="#090D16"/>
+  <rect x="32" y="32" width="448" height="448" rx="96" stroke="#F59E0B" stroke-width="12" stroke-opacity="0.3"/>
+  <!-- Barcode / Scanner Graphic -->
+  <path d="M128 160V128H160" stroke="#F59E0B" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M352 128H384V160" stroke="#F59E0B" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M384 352V384H352" stroke="#F59E0B" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M160 384H128V352" stroke="#F59E0B" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Center barcode bars -->
+  <rect x="176" y="192" width="20" height="128" rx="8" fill="#F59E0B"/>
+  <rect x="216" y="192" width="12" height="128" rx="6" fill="#F59E0B"/>
+  <rect x="248" y="192" width="32" height="128" rx="10" fill="#F59E0B"/>
+  <rect x="300" y="192" width="16" height="128" rx="8" fill="#F59E0B"/>
+  <rect x="332" y="192" width="24" height="128" rx="8" fill="#F59E0B"/>
+  <!-- Laser line -->
+  <line x1="112" y1="256" x2="400" y2="256" stroke="#EF4444" stroke-width="8" stroke-linecap="round"/>
+</svg>
