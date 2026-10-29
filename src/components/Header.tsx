@@ -148,35 +148,9 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Role Switcher Pill for Testing / Gerente vs Handheld APK */}
-          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[10px]">
-            <button
-              type="button"
-              onClick={() => onSetUserRole('GERENTE')}
-              className={`px-2 py-1 rounded-lg font-semibold transition-all flex items-center gap-1 ${
-                userRole === 'GERENTE' || userRole === 'MASTER'
-                  ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Vista normal de Gerente (Navegador Web)"
-            >
-              <Globe className="w-3 h-3" />
-              <span className="hidden xs:inline">Gerente</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onSetUserRole('OPERADOR_APK')}
-              className={`px-2 py-1 rounded-lg font-semibold transition-all flex items-center gap-1 ${
-                userRole === 'OPERADOR_APK'
-                  ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-              title="Vista Operador Handheld TC26 (Modo APK)"
-            >
-              <Smartphone className="w-3 h-3" />
-              <span className="hidden xs:inline">Handheld APK</span>
-              <span className="xs:hidden">APK</span>
-            </button>
+          {/* Role Switcher Pill (Hidden as requested: APK vs Web is determined automatically) */}
+          <div className="hidden" aria-hidden="true">
+            {/* Oculto: el modo APK y Gerente se determinan por entorno sin cambio manual */}
           </div>
 
           {/* Master Indicator Badge (when Master is unlocked via 12 secret taps) */}

@@ -18,6 +18,7 @@ import { UserRole, PowerAutomateConfig, SupabaseConfig } from '../types/inventor
 import { loadMasterPin, saveMasterPin } from '../utils/storage';
 import { testPowerAutomateWebhook, testSupabaseConnection } from '../utils/syncService';
 import { soundManager } from '../utils/audioHaptics';
+import { SUPABASE_SQL_SCRIPT } from '../utils/supabaseSql';
 
 interface MasterAuthModalProps {
   isOpen: boolean;
@@ -28,6 +29,8 @@ interface MasterAuthModalProps {
   onSavePowerAutomate: (cfg: PowerAutomateConfig) => void;
   supabaseConfig: SupabaseConfig;
   onSaveSupabase: (cfg: SupabaseConfig) => void;
+  onSyncAllToSupabase?: () => Promise<number>;
+  scansCount?: number;
 }
 
 export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
@@ -39,6 +42,8 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
   onSavePowerAutomate,
   supabaseConfig,
   onSaveSupabase,
+  onSyncAllToSupabase,
+  scansCount = 0,
 }) => {
   const [pinInput, setPinInput] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(userRole === 'MASTER');
@@ -58,6 +63,8 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
   const [paSaved, setPaSaved] = useState(false);
 
   // Supabase form state
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [syncAllFeedback, setSyncAllFeedback] = useState<string | null>(null);
   const [sbUrl, setSbUrl] = useState(supabaseConfig.url);
   const [sbAnonKey, setSbAnonKey] = useState(supabaseConfig.anonKey);
   const [sbTableName, setSbTableName] = useState(supabaseConfig.tableName || 'inventory_scans');
@@ -186,26 +193,7 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
     setTimeout(() => setSbSaved(false), 2000);
   };
 
-  const sqlCode = `-- Script para crear la tabla en Supabase SQL Editor
-create table if not exists inventory_scans (
-  id uuid default gen_random_uuid() primary key,
-  id_escaneo text,
-  fecha_hora timestamptz default now(),
-  sku text not null,
-  cantidad int not null,
-  descripcion text,
-  subinventario text,
-  localizador text,
-  ronda_conteo text,
-  operador text,
-  dispositivo text,
-  codigo_qr_raw text
-);
-
--- Habilitar permisos de inserción y lectura
-alter table inventory_scans enable row level security;
-create policy "Permitir insercion anonima" on inventory_scans for insert with check (true);
-create policy "Permitir lectura anonima" on inventory_scans for select using (true);`;
+  const sqlCode = SUPABASE_SQL_SCRIPT;
 
   const handleCopySql = () => {
     navigator.clipboard.writeText(sqlCode);
@@ -346,10 +334,25 @@ create policy "Permitir lectura anonima" on inventory_scans for select using (tr
                     ) : (
                       <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                     )}
-                    <div>
-                      <div className="font-bold">{paTestResult.message}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold break-words">{paTestResult.message}</div>
+                      {paTestResult.message.includes('DirectApiAuthorizationRequired') && (
+                        <div className="mt-2.5 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[11px] text-amber-200 leading-relaxed space-y-1.5">
+                          <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                            <span>💡</span>
+                            <span>Cómo solucionar este error en Power Automate:</span>
+                          </div>
+                          <ol className="list-decimal pl-4 space-y-1 text-slate-300">
+                            <li>Abre tu flujo en <strong>Power Automate</strong> y haz clic en el bloque disparador <strong>"Cuando se recibe una solicitud HTTP"</strong> (manual).</li>
+                            <li>En el campo <strong>"¿Quién puede desencadenar el flujo?"</strong>, confirma que esté seleccionado <strong>"Cualquiera"</strong>.</li>
+                            <li>Haz clic en el botón <strong>Guardar (Save)</strong> arriba a la derecha.</li>
+                            <li><strong>Importante:</strong> Al guardar con "Cualquiera", Power Automate regenera la URL y le agrega al final la clave de firma secreta (<code className="text-amber-400 font-mono font-bold">&amp;sig=...</code>).</li>
+                            <li>Vuelve a copiar esa nueva URL completa con su firma, pégala en el campo de arriba y haz clic en <em>"Guardar Configuración"</em> y luego en <em>"Probar Conexión"</em>.</li>
+                          </ol>
+                        </div>
+                      )}
                       {paTestResult.latencyMs > 0 && (
-                        <div className="font-mono text-[10px] text-slate-400 mt-0.5">
+                        <div className="font-mono text-[10px] text-slate-400 mt-1">
                           Latencia: {paTestResult.latencyMs} ms
                         </div>
                       )}
@@ -514,6 +517,47 @@ create policy "Permitir lectura anonima" on inventory_scans for select using (tr
                     <pre className="text-[10px] font-mono text-slate-400 overflow-x-auto p-2 bg-slate-900 rounded max-h-32 border border-slate-800">
                       {sqlCode}
                     </pre>
+                  </div>
+                )}
+
+                {/* Manual backup of local scans to Supabase */}
+                {onSyncAllToSupabase && (
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Respaldar Escaneos Locales en Supabase:
+                      </span>
+                      <span className="text-[11px] font-mono text-emerald-400 font-bold">
+                        {scansCount || 0} registros en memoria
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsSyncingAll(true);
+                        setSyncAllFeedback(null);
+                        try {
+                          const count = await onSyncAllToSupabase();
+                          setSyncAllFeedback(`✓ ${count} códigos guardados y respaldados exitosamente en la nube de Supabase.`);
+                          soundManager.playSuccess();
+                        } catch {
+                          setSyncAllFeedback('Error al respaldar escaneos en Supabase.');
+                          soundManager.playError();
+                        } finally {
+                          setIsSyncingAll(false);
+                        }
+                      }}
+                      disabled={isSyncingAll || !sbIsEnabled}
+                      className="w-full py-2.5 px-3 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 font-bold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      <Database className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAll ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingAll ? 'Guardando en Supabase...' : 'Guardar y Respaldar Todos los Códigos en Supabase Ahora'}</span>
+                    </button>
+                    {syncAllFeedback && (
+                      <p className="text-[11px] text-emerald-400 font-mono mt-1">
+                        {syncAllFeedback}
+                      </p>
+                    )}
                   </div>
                 )}
 

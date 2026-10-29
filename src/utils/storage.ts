@@ -275,32 +275,44 @@ export function computeDeviceSummaries(
   scans: ScannedItem[],
   currentDevice?: DeviceInfo,
   currentRound: CountRound = '1ER_CONTEO',
-  userRounds?: Record<number, CountRound>
+  userRounds?: Record<number, CountRound>,
+  cloudSessions?: DeviceStatusSummary[]
 ): DeviceStatusSummary[] {
   const map = new Map<string, DeviceStatusSummary>();
 
-  // If current device exists, register it first
-  if (currentDevice) {
-    const key = currentDevice.deviceName;
+  // 1. Incorporate cloud terminal sessions from Supabase
+  if (cloudSessions && cloudSessions.length > 0) {
+    for (const session of cloudSessions) {
+      const key = session.userNumber ? `Usuario ${session.userNumber}` : (session.deviceId || session.deviceName);
+      map.set(key, { ...session });
+    }
+  }
+
+  // 2. If current device exists, register or update it
+  if (currentDevice && currentDevice.userNumber) {
+    const key = `Usuario ${currentDevice.userNumber}`;
     const effectiveDevRound = (currentDevice.userNumber && userRounds?.[currentDevice.userNumber])
       ? userRounds[currentDevice.userNumber]
       : currentRound;
 
+    const existing = map.get(key);
     map.set(key, {
       deviceId: currentDevice.deviceId,
       deviceName: currentDevice.deviceName,
-      operatorName: currentDevice.operatorName || (currentDevice.userNumber ? `Usuario ${currentDevice.userNumber}` : 'Sin asignar'),
+      operatorName: currentDevice.operatorName || `Usuario ${currentDevice.userNumber}`,
       userNumber: currentDevice.userNumber,
       currentRound: effectiveDevRound,
-      totalPieces: 0,
-      totalScans: 0,
+      totalPieces: existing ? existing.totalPieces : 0,
+      totalScans: existing ? existing.totalScans : 0,
       lastActive: new Date().toISOString(),
+      lastSku: existing?.lastSku,
+      lastLocator: existing?.lastLocator,
     });
   }
 
-  // Iterate scans (scans are ordered newest first)
+  // 3. Iterate scans to update actual counts and latest sku
   for (const scan of scans) {
-    const devKey = scan.dispositivo || (scan.userNumber ? `Usuario ${scan.userNumber}` : scan.operador) || 'Dispositivo Desconocido';
+    const devKey = scan.userNumber ? `Usuario ${scan.userNumber}` : (scan.dispositivo || scan.operador || 'Dispositivo');
     const existing = map.get(devKey);
 
     if (!existing) {
@@ -317,12 +329,11 @@ export function computeDeviceSummaries(
         lastLocator: scan.localizador,
       });
     } else {
-      existing.totalPieces += scan.cantidad;
-      existing.totalScans += 1;
-      if (!existing.userNumber && scan.userNumber) {
-        existing.userNumber = scan.userNumber;
+      // If not already accumulated from cloud, increment
+      if (!cloudSessions || cloudSessions.length === 0) {
+        existing.totalPieces = (existing.totalPieces || 0) + scan.cantidad;
+        existing.totalScans = (existing.totalScans || 0) + 1;
       }
-      // Scans are ordered newest first, so the first scan encountered has the latest round & sku
       if (!existing.lastSku) {
         existing.lastSku = scan.sku;
         existing.lastLocator = scan.localizador;

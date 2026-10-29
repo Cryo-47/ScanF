@@ -115,9 +115,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     setLocalizador(parsed.localizador);
     setRawQrScanned(clean);
 
-    // Check for duplicate in current count round
+    // Check for duplicate LOCALIZADOR in current count round (per user requirement)
     const existingInRound = scans.filter(
-      (s) => s.sku === parsed.sku && s.conteoRound === effectiveRound
+      (s) => s.localizador.trim().toUpperCase() === parsed.localizador.trim().toUpperCase() && s.conteoRound === effectiveRound
     );
 
     if (existingInRound.length > 0) {
@@ -385,30 +385,40 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
         {/* Assigned Device / User Number / Operator Tag */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={onOpenCheckIn || onOpenDeviceSetup}
-            title={deviceInfo.isUserNumberLocked ? 'Número de usuario vinculado a este dispositivo' : 'Configurar asignación de terminal'}
-            className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 active:scale-95 text-slate-300 hover:text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all border border-slate-800"
-          >
-            {deviceInfo.userNumber ? (
+          {/* Assigned Device / User Number / Operator Tag (Locked during active count) */}
+          {deviceInfo.isUserNumberLocked ? (
+            <div
+              title="🔒 Usuario y terminal vinculados durante el ciclo. El nombre solo se modificará al pasar al 2do conteo y el usuario al finalizar todos los conteos."
+              className="px-2.5 py-1 bg-slate-950 text-slate-300 rounded-lg text-xs font-medium flex items-center gap-1.5 border border-slate-800 select-none shadow-sm"
+            >
               <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 font-bold font-mono text-[11px] flex items-center gap-1">
                 <Lock className="w-2.5 h-2.5" />
                 <span>U{deviceInfo.userNumber}</span>
               </span>
-            ) : (
-              <Smartphone className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            )}
-            
-            <span className="font-bold text-white max-w-[130px] sm:max-w-[200px] truncate">
-              {deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : deviceInfo.deviceName}
-            </span>
-            {deviceInfo.operatorName && (
-              <span className="text-slate-400 max-w-[110px] truncate hidden xs:inline">
-                ({deviceInfo.operatorName})
+              <span className="font-bold text-white max-w-[130px] sm:max-w-[200px] truncate">
+                Usuario {deviceInfo.userNumber}
               </span>
-            )}
-            <Edit2 className="w-3 h-3 text-slate-500 hover:text-amber-400 shrink-0" />
-          </button>
+              {deviceInfo.operatorName && (
+                <span className="text-slate-400 max-w-[110px] truncate hidden xs:inline">
+                  ({deviceInfo.operatorName})
+                </span>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={onOpenCheckIn || onOpenDeviceSetup}
+              title="Configurar asignación inicial de terminal"
+              className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 active:scale-95 text-slate-300 hover:text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all border border-slate-800"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="font-bold text-white max-w-[130px] sm:max-w-[200px] truncate">
+                {deviceInfo.deviceName}
+              </span>
+              <span className="text-amber-400 text-[11px] font-semibold">
+                (Elegir Usuario)
+              </span>
+            </button>
+          )}
 
           {userRole === 'MASTER' && (
             <button
@@ -799,13 +809,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
             <div className="space-y-1">
               <div className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-mono text-[11px] font-bold inline-block mb-1">
-                CÓDIGO REPETIDO
+                LOCALIZADOR YA ESCANEADO
               </div>
               <h3 className="text-base font-bold text-white tracking-tight leading-snug">
-                El SKU {duplicateWarning.sku} ya fue escaneado en esta ronda
+                El Localizador {duplicateWarning.localizador} ya fue escaneado en esta ronda
               </h3>
               <p className="text-xs text-slate-400 leading-normal">
-                Escaneado anteriormente a las <strong>{duplicateWarning.prevTime}</strong> en {duplicateWarning.localizador}.
+                Esta ubicación ya tiene un registro previo en esta ronda a las <strong>{duplicateWarning.prevTime}</strong> (SKU: {duplicateWarning.sku}).
               </p>
             </div>
 

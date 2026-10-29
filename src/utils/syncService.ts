@@ -1,4 +1,4 @@
-import { ScannedItem, PowerAutomateConfig, SupabaseConfig } from '../types/inventory';
+import { ScannedItem, PowerAutomateConfig, SupabaseConfig, DeviceInfo, DeviceStatusSummary, CountRound } from '../types/inventory';
 
 export interface SyncResult {
   sharepointState: 'synced' | 'pending' | 'failed' | 'simulated';
@@ -35,17 +35,341 @@ export function buildPowerAutomatePayload(item: ScannedItem) {
   };
 }
 
-export function getSupabaseRestEndpoint(url: string, tableName = 'inventory_scans'): string {
+export function getSupabaseRestEndpoint(url: string, tableName: string): string {
   let cleanUrl = url.trim().replace(/\/+$/, '');
   if (cleanUrl.endsWith('/rest/v1')) {
     cleanUrl = cleanUrl.substring(0, cleanUrl.length - '/rest/v1'.length);
   }
-  const cleanTable = encodeURIComponent(tableName.trim() || 'inventory_scans');
+  const cleanTable = encodeURIComponent(tableName.trim());
   return `${cleanUrl}/rest/v1/${cleanTable}`;
 }
 
 /**
- * Synchronize a single scanned item to Power Automate (SharePoint)
+ * Push device heartbeat and selected user number (1 to 10) to Supabase
+ * This enables the Gerente web browser to immediately see the connected handheld.
+ */
+export async function pushTerminalPresence(
+  deviceInfo: DeviceInfo,
+  currentRound: CountRound,
+  stats: {
+    totalScans: number;
+    totalPieces: number;
+    lastSku?: string;
+    lastLocator?: string;
+  },
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions');
+  const payload = {
+    device_id: deviceInfo.deviceId || 'TC26-DEFAULT',
+    device_name: deviceInfo.deviceName || 'TC26 - Terminal',
+    operator_name: deviceInfo.operatorName || (deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : 'Sin asignar'),
+    user_number: deviceInfo.userNumber !== undefined ? deviceInfo.userNumber : null,
+    current_round: currentRound,
+    total_scans: stats.totalScans || 0,
+    total_piezas: stats.totalPieces || 0,
+    last_sku: stats.lastSku || null,
+    last_locator: stats.lastLocator || null,
+    last_active: new Date().toISOString(),
+    status: 'online',
+    updated_at: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return res.ok || res.status === 200 || res.status === 201 || res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch all active handheld sessions from Supabase for Gerente's live monitoring
+ */
+export async function fetchTerminalSessions(
+  supabaseConfig?: SupabaseConfig
+): Promise<DeviceStatusSummary[]> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return [];
+  }
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?select=*&order=last_active.desc`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+
+    return data.map((row: Record<string, unknown>) => ({
+      deviceId: String(row.device_id || ''),
+      deviceName: String(row.device_name || row.device_id || 'TC26'),
+      operatorName: String(row.operator_name || (row.user_number ? `Usuario ${row.user_number}` : 'Operador')),
+      userNumber: row.user_number ? Number(row.user_number) : undefined,
+      currentRound: (row.current_round as CountRound) || '1ER_CONTEO',
+      totalPieces: Number(row.total_piezas || 0),
+      totalScans: Number(row.total_scans || 0),
+      lastActive: String(row.last_active || new Date().toISOString()),
+      lastSku: row.last_sku ? String(row.last_sku) : undefined,
+      lastLocator: row.last_locator ? String(row.last_locator) : undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Push an inventory scan to Supabase cloud table
+ */
+export async function pushScanToSupabase(
+  item: ScannedItem,
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans');
+  const payload = {
+    id: item.id,
+    fecha_hora: item.timestamp,
+    sku: item.sku,
+    cantidad: item.cantidad,
+    descripcion: item.descripcion,
+    subinventario: item.subinventario,
+    localizador: item.localizador,
+    ronda_conteo: item.conteoRound,
+    operador: item.operador,
+    dispositivo: item.dispositivo,
+    user_number: item.userNumber ?? null,
+    codigo_qr_raw: item.rawQr,
+    sync_state_sharepoint: item.syncStateSharepoint || 'synced',
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return res.ok || res.status === 200 || res.status === 201 || res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch all scans stored in Supabase cloud so Gerente and handhelds stay completely synchronized
+ */
+export async function fetchCloudScans(
+  supabaseConfig?: SupabaseConfig
+): Promise<ScannedItem[]> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return [];
+  }
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?select=*&order=fecha_hora.desc&limit=2000`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+
+    return data.map((row: Record<string, unknown>) => ({
+      id: String(row.id || ''),
+      sku: String(row.sku || ''),
+      cantidad: Number(row.cantidad || 0),
+      descripcion: String(row.descripcion || ''),
+      subinventario: String(row.subinventario || ''),
+      localizador: String(row.localizador || ''),
+      conteoRound: (row.ronda_conteo as CountRound) || '1ER_CONTEO',
+      rawQr: String(row.codigo_qr_raw || ''),
+      timestamp: String(row.fecha_hora || row.created_at || new Date().toISOString()),
+      operador: String(row.operador || 'Usuario 1'),
+      userNumber: row.user_number ? Number(row.user_number) : undefined,
+      dispositivo: String(row.dispositivo || 'TC26'),
+      syncStateSharepoint: (row.sync_state_sharepoint as any) || 'synced',
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Delete a single scan record from Supabase table (Master user only)
+ */
+export async function deleteScanFromSupabase(
+  scanId: string,
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?id=eq.${encodeURIComponent(scanId)}`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    return res.ok || res.status === 204 || res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete all scan records from Supabase table (Master user only)
+ */
+export async function deleteAllScansFromSupabase(
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  // PostgREST requires a filter to prevent accidental unconditional deletion of whole tables.
+  // Using id=not.is.null matches all records with a non-null id.
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?id=not.is.null`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    return res.ok || res.status === 204 || res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Push round authorizations (Gerente) to Supabase so handhelds reflect the changes automatically
+ */
+export async function pushRoundControl(
+  globalRound: CountRound,
+  userRounds: Record<number, CountRound>,
+  authorizations: Record<number, boolean>,
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_round_control');
+  const payload = {
+    id: 'global_control',
+    global_round: globalRound,
+    user_rounds: userRounds,
+    round2_authorizations: authorizations,
+    updated_at: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return res.ok || res.status === 200 || res.status === 201 || res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch round control state from Supabase
+ */
+export async function fetchRoundControl(
+  supabaseConfig?: SupabaseConfig
+): Promise<{
+  globalRound: CountRound;
+  userRounds: Record<number, CountRound>;
+  authorizations: Record<number, boolean>;
+} | null> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return null;
+  }
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_round_control')}?id=eq.global_control&limit=1`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    const row = data[0];
+    return {
+      globalRound: (row.global_round as CountRound) || '1ER_CONTEO',
+      userRounds: (row.user_rounds as Record<number, CountRound>) || {},
+      authorizations: (row.round2_authorizations as Record<number, boolean>) || {},
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Synchronize a single scanned item to Power Automate (SharePoint) and Supabase
  */
 export async function syncScannedItem(
   item: ScannedItem,
@@ -81,47 +405,13 @@ export async function syncScannedItem(
       errorMessage = `Error de conexión: ${msg}`;
     }
   } else {
-    // If webhook is not configured or in local test mode
     sharepointState = 'simulated';
   }
 
   // Supabase Sync (Cloud Database)
   if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
-    try {
-      const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, supabaseConfig.tableName || 'inventory_scans');
-      const payload = {
-        id_escaneo: item.id,
-        fecha_hora: item.timestamp,
-        sku: item.sku,
-        cantidad: item.cantidad,
-        descripcion: item.descripcion,
-        subinventario: item.subinventario,
-        localizador: item.localizador,
-        ronda_conteo: item.conteoRound,
-        operador: item.operador,
-        dispositivo: item.dispositivo,
-        codigo_qr_raw: item.rawQr,
-      };
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': supabaseConfig.anonKey.trim(),
-          'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
-          'Prefer': 'return=minimal',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok || res.status === 201 || res.status === 200 || res.status === 204) {
-        supabaseState = 'synced';
-      } else {
-        supabaseState = 'failed';
-      }
-    } catch {
-      supabaseState = 'failed';
-    }
+    const success = await pushScanToSupabase(item, supabaseConfig);
+    supabaseState = success ? 'synced' : 'failed';
   } else {
     supabaseState = 'simulated';
   }
@@ -200,7 +490,7 @@ export async function testPowerAutomateWebhook(webhookUrl: string): Promise<{ su
 export async function testSupabaseConnection(
   url: string, 
   anonKey: string, 
-  tableName = 'inventory_scans'
+  tableName = 'terminal_sessions'
 ): Promise<{ success: boolean; message: string; latencyMs: number }> {
   if (!url || !url.startsWith('http')) {
     return {
@@ -217,7 +507,7 @@ export async function testSupabaseConnection(
     };
   }
 
-  const cleanTable = tableName.trim() || 'inventory_scans';
+  const cleanTable = tableName.trim() || 'terminal_sessions';
   const endpoint = `${getSupabaseRestEndpoint(url, cleanTable)}?select=*&limit=1`;
   const start = performance.now();
 
@@ -235,7 +525,7 @@ export async function testSupabaseConnection(
     if (res.ok || res.status === 200 || res.status === 206) {
       return {
         success: true,
-        message: `Conexión exitosa con Supabase. La tabla "${cleanTable}" está accesible.`,
+        message: `Conexión exitosa con Supabase. La tabla "${cleanTable}" está accesible y lista para sincronización en vivo.`,
         latencyMs,
       };
     } else {

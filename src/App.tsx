@@ -5,7 +5,8 @@ import {
   SupabaseConfig,
   CountRound,
   UserRole,
-  DeviceInfo
+  DeviceInfo,
+  DeviceStatusSummary
 } from './types/inventory';
 import { 
   loadScans, 
@@ -26,7 +27,17 @@ import {
   computeDeviceSummaries, 
   isRunningInApkOrStandalone 
 } from './utils/storage';
-import { syncScannedItem } from './utils/syncService';
+import { 
+  syncScannedItem,
+  pushTerminalPresence,
+  fetchTerminalSessions,
+  fetchCloudScans,
+  pushScanToSupabase,
+  deleteScanFromSupabase,
+  deleteAllScansFromSupabase,
+  pushRoundControl,
+  fetchRoundControl
+} from './utils/syncService';
 import { Header } from './components/Header';
 import { ScannerView } from './components/ScannerView';
 import { HistoryView } from './components/HistoryView';
@@ -60,6 +71,10 @@ export default function App() {
   const [isMasterAuthOpen, setIsMasterAuthOpen] = useState(false);
   const [isHandheldCheckInOpen, setIsHandheldCheckInOpen] = useState(false);
 
+  // Cloud terminal sessions from Supabase
+  const [cloudTerminalSessions, setCloudTerminalSessions] = useState<DeviceStatusSummary[]>([]);
+  const deletedScanIdsRef = React.useRef<Set<string>>(new Set());
+
   // Load stored data on mount
   useEffect(() => {
     setScans(loadScans());
@@ -91,6 +106,122 @@ export default function App() {
     deviceInfo.userNumber && userRounds[deviceInfo.userNumber]
       ? userRounds[deviceInfo.userNumber]
       : countRound;
+
+  // 1. PRESENCE HEARTBEAT: Sends active terminal status to Supabase so Gerente sees it in real time
+  useEffect(() => {
+    if (!deviceInfo.userNumber || !supabaseConfig.isEnabled) return;
+
+    const sendHeartbeat = () => {
+      const totalPieces = scans.reduce((acc, s) => acc + s.cantidad, 0);
+      const latestScan = scans[0];
+      pushTerminalPresence(
+        deviceInfo,
+        activeDeviceRound,
+        {
+          totalScans: scans.length,
+          totalPieces,
+          lastSku: latestScan?.sku,
+          lastLocator: latestScan?.localizador,
+        },
+        supabaseConfig
+      );
+    };
+
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 10000);
+    return () => clearInterval(interval);
+  }, [deviceInfo, activeDeviceRound, scans, supabaseConfig]);
+
+  // 2. CLOUD LIVE SYNC POLLING: Fetches terminal sessions, cloud scans, and round control from Supabase
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncCloudData = async () => {
+      if (!supabaseConfig.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+        return;
+      }
+
+      // Fetch live terminal sessions
+      try {
+        const remoteSessions = await fetchTerminalSessions(supabaseConfig);
+        if (isMounted && remoteSessions.length > 0) {
+          setCloudTerminalSessions(remoteSessions);
+        }
+      } catch {
+        // ignore
+      }
+
+      // Fetch cloud scans, merge, and auto-save any local scans to Supabase
+      try {
+        const rawRemoteScans = await fetchCloudScans(supabaseConfig);
+        if (isMounted) {
+          const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
+          const remoteIds = new Set(remoteScans.map((s) => s.id));
+          
+          // Auto-save local scans to Supabase if they are not stored in Supabase yet
+          const unpushed = scans.filter(
+            (s) => !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
+          );
+          if (unpushed.length > 0) {
+            for (const item of unpushed) {
+              await pushScanToSupabase(item, supabaseConfig);
+            }
+          }
+
+          if (remoteScans.length > 0 || unpushed.length > 0) {
+            setScans((prev) => {
+              const map = new Map<string, ScannedItem>();
+              for (const s of remoteScans) map.set(s.id, s);
+              for (const s of prev) {
+                if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
+                  map.set(s.id, s);
+                }
+              }
+              const merged = Array.from(map.values()).sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+              );
+              saveScans(merged);
+              return merged;
+            });
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // Fetch round control
+      try {
+        const control = await fetchRoundControl(supabaseConfig);
+        if (isMounted && control) {
+          if (control.globalRound && control.globalRound !== countRound) {
+            setCountRound(control.globalRound);
+            saveCountRound(control.globalRound);
+            if (control.globalRound === 'CONTEO_FINALIZADO') {
+              unlockUserNumberCycle();
+              setDeviceInfo(loadDeviceInfo());
+            }
+          }
+          if (control.userRounds && Object.keys(control.userRounds).length > 0) {
+            setUserRounds(control.userRounds);
+            saveUserRounds(control.userRounds);
+          }
+          if (control.authorizations && Object.keys(control.authorizations).length > 0) {
+            setRound2Authorizations(control.authorizations);
+            saveRound2Authorizations(control.authorizations);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    syncCloudData();
+    const pollInterval = setInterval(syncCloudData, 4000);
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+    };
+  }, [supabaseConfig, countRound]);
 
   // Handheld check-in prompt:
   // In APK mode, if userNumber is not chosen/locked yet, or if round changed and name needs re-prompt
@@ -126,6 +257,21 @@ export default function App() {
       saveScans(next);
       return next;
     });
+
+    // Update presence with latest scan immediately
+    if (deviceInfo.userNumber) {
+      pushTerminalPresence(
+        deviceInfo,
+        activeDeviceRound,
+        {
+          totalScans: scans.length + 1,
+          totalPieces: scans.reduce((acc, s) => acc + s.cantidad, 0) + item.cantidad,
+          lastSku: item.sku,
+          lastLocator: item.localizador,
+        },
+        supabaseConfig
+      );
+    }
   };
 
   // Gerente advances an individual user (1 to 10) to 2nd count, 3rd count or returns to 1st count
@@ -143,6 +289,9 @@ export default function App() {
       setDeviceInfo(updatedDev);
       saveDeviceInfo(updatedDev);
     }
+
+    // Sync round control to Supabase
+    pushRoundControl(countRound, next, round2Authorizations, supabaseConfig);
   };
 
   // Gerente advances or sets all users (1 to 10) to a round
@@ -153,6 +302,8 @@ export default function App() {
     saveUserRounds(next);
     setCountRound(round);
     saveCountRound(round);
+
+    pushRoundControl(round, next, round2Authorizations, supabaseConfig);
   };
 
   // Gerente authorizes new round globally or resets cycle
@@ -160,17 +311,30 @@ export default function App() {
     setCountRound(newRound);
     saveCountRound(newRound);
 
+    let nextUserRounds = { ...userRounds };
     if (newRound === '1ER_CONTEO') {
-      handleSetAllUsersRound('1ER_CONTEO');
+      for (let i = 1; i <= 10; i++) nextUserRounds[i] = '1ER_CONTEO';
+      setUserRounds(nextUserRounds);
+      saveUserRounds(nextUserRounds);
       unlockUserNumberCycle();
       setDeviceInfo(loadDeviceInfo());
     } else if (newRound === '2DO_CONTEO') {
-      handleSetAllUsersRound('2DO_CONTEO');
+      for (let i = 1; i <= 10; i++) nextUserRounds[i] = '2DO_CONTEO';
+      setUserRounds(nextUserRounds);
+      saveUserRounds(nextUserRounds);
     } else if (newRound === '3ER_CONTEO') {
-      handleSetAllUsersRound('3ER_CONTEO');
+      for (let i = 1; i <= 10; i++) nextUserRounds[i] = '3ER_CONTEO';
+      setUserRounds(nextUserRounds);
+      saveUserRounds(nextUserRounds);
     } else if (newRound === 'CONTEO_FINALIZADO') {
-      handleSetAllUsersRound('CONTEO_FINALIZADO');
+      for (let i = 1; i <= 10; i++) nextUserRounds[i] = 'CONTEO_FINALIZADO';
+      setUserRounds(nextUserRounds);
+      saveUserRounds(nextUserRounds);
+      unlockUserNumberCycle();
+      setDeviceInfo(loadDeviceInfo());
     }
+
+    pushRoundControl(newRound, nextUserRounds, round2Authorizations, supabaseConfig);
   };
 
   // Clear local history
@@ -191,6 +355,52 @@ export default function App() {
     saveSupabaseConfig(cfg);
   };
 
+  // Sync / backup all local scans to Supabase
+  const handleSyncAllScansToSupabase = async (): Promise<number> => {
+    if (!supabaseConfig.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+      throw new Error('Supabase no está configurado o habilitado');
+    }
+    let count = 0;
+    for (const scan of scans) {
+      const ok = await pushScanToSupabase(scan, supabaseConfig);
+      if (ok) count++;
+    }
+    return count;
+  };
+
+  // Delete a single scan from Supabase (Master user only)
+  const handleDeleteScanFromSupabase = async (scanId: string): Promise<boolean> => {
+    if (userRole !== 'MASTER') {
+      throw new Error('Solo el usuario Master tiene permisos para eliminar registros de Supabase.');
+    }
+    deletedScanIdsRef.current.add(scanId);
+    const ok = await deleteScanFromSupabase(scanId, supabaseConfig);
+    if (ok) {
+      setScans((prev) => {
+        const next = prev.filter((s) => s.id !== scanId);
+        saveScans(next);
+        return next;
+      });
+    }
+    return ok;
+  };
+
+  // Delete all scans from Supabase (Master user only)
+  const handleDeleteAllScansFromSupabase = async (): Promise<boolean> => {
+    if (userRole !== 'MASTER') {
+      throw new Error('Solo el usuario Master tiene permisos para eliminar registros de Supabase.');
+    }
+    for (const scan of scans) {
+      deletedScanIdsRef.current.add(scan.id);
+    }
+    const ok = await deleteAllScansFromSupabase(supabaseConfig);
+    if (ok) {
+      setScans([]);
+      saveScans([]);
+    }
+    return ok;
+  };
+
   // Update Excel link directly from HistoryView
   const handleUpdateExcelLink = (newUrl: string) => {
     const updated = {
@@ -207,7 +417,7 @@ export default function App() {
   };
 
   // Handheld Initial Check-in (Name + User Number 1 to 10)
-  const handleSaveCheckIn = (fullName: string, userNumber: number) => {
+  const handleSaveCheckIn = async (fullName: string, userNumber: number) => {
     const updated: DeviceInfo = {
       ...deviceInfo,
       operatorName: fullName,
@@ -218,10 +428,21 @@ export default function App() {
     setDeviceInfo(updated);
     saveDeviceInfo(updated);
     setIsHandheldCheckInOpen(false);
+
+    // Immediately push presence to Supabase so Gerente sees it in real time
+    await pushTerminalPresence(
+      updated,
+      activeDeviceRound,
+      {
+        totalScans: scans.length,
+        totalPieces: scans.reduce((acc, s) => acc + s.cantidad, 0),
+      },
+      supabaseConfig
+    );
   };
 
   // Handheld Name Re-Prompt when round changed
-  const handleConfirmNewRoundName = (fullName: string) => {
+  const handleConfirmNewRoundName = async (fullName: string) => {
     const updated: DeviceInfo = {
       ...deviceInfo,
       operatorName: fullName,
@@ -230,6 +451,16 @@ export default function App() {
     setDeviceInfo(updated);
     saveDeviceInfo(updated);
     setIsHandheldCheckInOpen(false);
+
+    await pushTerminalPresence(
+      updated,
+      activeDeviceRound,
+      {
+        totalScans: scans.length,
+        totalPieces: scans.reduce((acc, s) => acc + s.cantidad, 0),
+      },
+      supabaseConfig
+    );
   };
 
   // Gerente round 2 user authorization toggles
@@ -240,6 +471,8 @@ export default function App() {
     };
     setRound2Authorizations(next);
     saveRound2Authorizations(next);
+
+    pushRoundControl(countRound, userRounds, next, supabaseConfig);
   };
 
   const handleSetAllUsersRound2 = (enabled: boolean) => {
@@ -247,6 +480,8 @@ export default function App() {
     for (let i = 1; i <= 10; i++) next[i] = enabled;
     setRound2Authorizations(next);
     saveRound2Authorizations(next);
+
+    pushRoundControl(countRound, userRounds, next, supabaseConfig);
   };
 
   const roundCounts = {
@@ -256,7 +491,14 @@ export default function App() {
   };
 
   // Compute live device summaries for monitoring who is on Count 1 and who is on Count 2
-  const deviceSummaries = computeDeviceSummaries(scans, deviceInfo, countRound, userRounds);
+  // Merges local device state, local scans, and cloud terminal sessions from Supabase
+  const deviceSummaries = computeDeviceSummaries(
+    scans,
+    deviceInfo,
+    countRound,
+    userRounds,
+    cloudTerminalSessions
+  );
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
@@ -311,6 +553,8 @@ export default function App() {
             round2Authorizations={round2Authorizations}
             onToggleUserRound2={handleToggleUserRound2}
             onSetAllUsersRound2={handleSetAllUsersRound2}
+            onDeleteScanFromSupabase={handleDeleteScanFromSupabase}
+            onDeleteAllScansFromSupabase={handleDeleteAllScansFromSupabase}
           />
         )}
 
@@ -321,6 +565,8 @@ export default function App() {
             onSaveConfig={handleSavePowerAutomate}
             supabaseConfig={supabaseConfig}
             onSaveSupabase={handleSaveSupabase}
+            onSyncAllToSupabase={handleSyncAllScansToSupabase}
+            scansCount={scans.length}
           />
         )}
       </main>
@@ -335,6 +581,8 @@ export default function App() {
         onSavePowerAutomate={handleSavePowerAutomate}
         supabaseConfig={supabaseConfig}
         onSaveSupabase={handleSaveSupabase}
+        onSyncAllToSupabase={handleSyncAllScansToSupabase}
+        scansCount={scans.length}
       />
 
       {/* Handheld Device & Operator Setup Modal */}
