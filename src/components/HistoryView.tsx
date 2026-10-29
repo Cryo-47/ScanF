@@ -24,15 +24,18 @@ interface HistoryViewProps {
   deviceSummaries: DeviceStatusSummary[];
   onUpdateExcelLink?: (newUrl: string) => void;
   currentRound: CountRound;
+  userRounds: Record<number, CountRound>;
   onAuthorizeRound: (nextRound: CountRound) => void;
+  onSetUserRound: (userNumber: number, round: CountRound) => void;
+  onSetAllUsersRound: (round: CountRound) => void;
   scansCountInRound: {
     round1: number;
     round2: number;
     round3: number;
   };
-  round2Authorizations: Record<number, boolean>;
-  onToggleUserRound2: (userNumber: number) => void;
-  onSetAllUsersRound2: (enabled: boolean) => void;
+  round2Authorizations?: Record<number, boolean>;
+  onToggleUserRound2?: (userNumber: number) => void;
+  onSetAllUsersRound2?: (enabled: boolean) => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -43,7 +46,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   deviceSummaries,
   onUpdateExcelLink,
   currentRound,
+  userRounds,
   onAuthorizeRound,
+  onSetUserRound,
+  onSetAllUsersRound,
   scansCountInRound,
   round2Authorizations,
   onToggleUserRound2,
@@ -98,9 +104,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         totalScans={scans.length}
       />
 
-      {/* EXCLUSIVO GERENTE: Asignación de Usuarios (1 al 10) para el 2do Conteo */}
+      {/* EXCLUSIVO GERENTE: Asignación y Avance Individual al 2do Conteo */}
       <GerenteUserAssignmentPanel
         currentRound={currentRound}
+        userRounds={userRounds}
+        onSetUserRound={onSetUserRound}
+        onSetAllUsersRound={onSetAllUsersRound}
         authorizations={round2Authorizations}
         onToggleUser={onToggleUserRound2}
         onSetAllUsers={onSetAllUsersRound2}

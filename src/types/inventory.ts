@@ -46,6 +46,8 @@ export interface DeviceInfo {
 
 export type Round2Authorizations = Record<number, boolean>;
 
+export type UserRoundsMap = Record<number, CountRound>;
+
 export interface DeviceStatusSummary {
   deviceId: string;
   deviceName: string;

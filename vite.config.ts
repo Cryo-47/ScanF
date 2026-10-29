@@ -5,6 +5,11 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: '/ScanF/',
+  // 👇 Evita el error 'process is not defined' en producción:
+  define: {
+    'process.env': {},
+  },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

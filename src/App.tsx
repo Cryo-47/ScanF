@@ -21,6 +21,8 @@ import {
   unlockUserNumberCycle,
   loadRound2Authorizations,
   saveRound2Authorizations,
+  loadUserRounds,
+  saveUserRounds,
   computeDeviceSummaries, 
   isRunningInApkOrStandalone 
 } from './utils/storage';
@@ -47,6 +49,7 @@ export default function App() {
   // Persistent data
   const [scans, setScans] = useState<ScannedItem[]>([]);
   const [countRound, setCountRound] = useState<CountRound>('1ER_CONTEO');
+  const [userRounds, setUserRounds] = useState<Record<number, CountRound>>(loadUserRounds);
   const [powerAutomateConfig, setPowerAutomateConfig] = useState<PowerAutomateConfig>(loadPowerAutomateConfig);
   const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfig>(loadSupabaseConfig);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo>(loadDeviceInfo);
@@ -61,11 +64,33 @@ export default function App() {
   useEffect(() => {
     setScans(loadScans());
     setCountRound(loadCountRound());
+    setUserRounds(loadUserRounds());
     setDeviceInfo(loadDeviceInfo());
     setPowerAutomateConfig(loadPowerAutomateConfig());
     setSupabaseConfig(loadSupabaseConfig());
     setRound2Authorizations(loadRound2Authorizations());
+
+    // Sync across tabs/windows (e.g. handheld simulator tab vs manager web tab)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'tc26_user_rounds_v3') {
+        setUserRounds(loadUserRounds());
+      }
+      if (e.key === 'tc26_current_round_v2') {
+        setCountRound(loadCountRound());
+      }
+      if (e.key === 'tc26_device_info_v4') {
+        setDeviceInfo(loadDeviceInfo());
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
+
+  // Determine the effective round for this terminal (individual user round has priority)
+  const activeDeviceRound: CountRound = 
+    deviceInfo.userNumber && userRounds[deviceInfo.userNumber]
+      ? userRounds[deviceInfo.userNumber]
+      : countRound;
 
   // Handheld check-in prompt:
   // In APK mode, if userNumber is not chosen/locked yet, or if round changed and name needs re-prompt
@@ -76,15 +101,15 @@ export default function App() {
         deviceInfo.userNumber && 
         deviceInfo.isUserNumberLocked && 
         deviceInfo.registeredRound && 
-        deviceInfo.registeredRound !== countRound && 
-        countRound !== 'CONTEO_FINALIZADO'
+        deviceInfo.registeredRound !== activeDeviceRound && 
+        activeDeviceRound !== 'CONTEO_FINALIZADO'
       );
 
       if (needsInitialBinding || needsRoundReauth) {
         setIsHandheldCheckInOpen(true);
       }
     }
-  }, [userRole, deviceInfo, countRound]);
+  }, [userRole, deviceInfo, activeDeviceRound]);
 
   // Save new scan item
   const handleScanComplete = async (item: ScannedItem) => {
@@ -103,15 +128,48 @@ export default function App() {
     });
   };
 
-  // Gerente authorizes new round or resets cycle
+  // Gerente advances an individual user (1 to 10) to 2nd count, 3rd count or returns to 1st count
+  const handleSetUserRound = (userNum: number, round: CountRound) => {
+    const next = {
+      ...userRounds,
+      [userNum]: round,
+    };
+    setUserRounds(next);
+    saveUserRounds(next);
+
+    // If current device happens to be this user, update its registeredRound trigger
+    if (deviceInfo.userNumber === userNum) {
+      const updatedDev = { ...deviceInfo };
+      setDeviceInfo(updatedDev);
+      saveDeviceInfo(updatedDev);
+    }
+  };
+
+  // Gerente advances or sets all users (1 to 10) to a round
+  const handleSetAllUsersRound = (round: CountRound) => {
+    const next: Record<number, CountRound> = {};
+    for (let i = 1; i <= 10; i++) next[i] = round;
+    setUserRounds(next);
+    saveUserRounds(next);
+    setCountRound(round);
+    saveCountRound(round);
+  };
+
+  // Gerente authorizes new round globally or resets cycle
   const handleAuthorizeRound = (newRound: CountRound) => {
     setCountRound(newRound);
     saveCountRound(newRound);
 
-    // If restarting to 1st count or finalizing, we allow clearing previous round registrations
     if (newRound === '1ER_CONTEO') {
+      handleSetAllUsersRound('1ER_CONTEO');
       unlockUserNumberCycle();
       setDeviceInfo(loadDeviceInfo());
+    } else if (newRound === '2DO_CONTEO') {
+      handleSetAllUsersRound('2DO_CONTEO');
+    } else if (newRound === '3ER_CONTEO') {
+      handleSetAllUsersRound('3ER_CONTEO');
+    } else if (newRound === 'CONTEO_FINALIZADO') {
+      handleSetAllUsersRound('CONTEO_FINALIZADO');
     }
   };
 
@@ -155,7 +213,7 @@ export default function App() {
       operatorName: fullName,
       userNumber,
       isUserNumberLocked: true,
-      registeredRound: countRound,
+      registeredRound: activeDeviceRound,
     };
     setDeviceInfo(updated);
     saveDeviceInfo(updated);
@@ -167,7 +225,7 @@ export default function App() {
     const updated: DeviceInfo = {
       ...deviceInfo,
       operatorName: fullName,
-      registeredRound: countRound,
+      registeredRound: activeDeviceRound,
     };
     setDeviceInfo(updated);
     saveDeviceInfo(updated);
@@ -198,7 +256,7 @@ export default function App() {
   };
 
   // Compute live device summaries for monitoring who is on Count 1 and who is on Count 2
-  const deviceSummaries = computeDeviceSummaries(scans, deviceInfo, countRound);
+  const deviceSummaries = computeDeviceSummaries(scans, deviceInfo, countRound, userRounds);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
@@ -206,7 +264,7 @@ export default function App() {
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        countRound={countRound}
+        countRound={activeDeviceRound}
         onOpenMasterAuth={() => setIsMasterAuthOpen(true)}
         scansCount={scans.length}
         scans={scans}
@@ -223,6 +281,7 @@ export default function App() {
             scans={scans}
             powerAutomateConfig={powerAutomateConfig}
             countRound={countRound}
+            userRounds={userRounds}
             operatorName={deviceInfo.operatorName}
             userRole={userRole}
             deviceInfo={deviceInfo}
@@ -244,7 +303,10 @@ export default function App() {
             deviceSummaries={deviceSummaries}
             onUpdateExcelLink={handleUpdateExcelLink}
             currentRound={countRound}
+            userRounds={userRounds}
             onAuthorizeRound={handleAuthorizeRound}
+            onSetUserRound={handleSetUserRound}
+            onSetAllUsersRound={handleSetAllUsersRound}
             scansCountInRound={roundCounts}
             round2Authorizations={round2Authorizations}
             onToggleUserRound2={handleToggleUserRound2}
@@ -287,7 +349,7 @@ export default function App() {
       <HandheldCheckInModal
         isOpen={isHandheldCheckInOpen}
         deviceInfo={deviceInfo}
-        currentRound={countRound}
+        currentRound={activeDeviceRound}
         onSaveCheckIn={handleSaveCheckIn}
         onConfirmNewRoundName={handleConfirmNewRoundName}
       />

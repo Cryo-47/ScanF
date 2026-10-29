@@ -21,6 +21,7 @@ interface ScannerViewProps {
   scans: ScannedItem[];
   powerAutomateConfig: PowerAutomateConfig;
   countRound: CountRound;
+  userRounds?: Record<number, CountRound>;
   operatorName: string;
   userRole: UserRole;
   deviceInfo: DeviceInfo;
@@ -36,6 +37,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   scans,
   powerAutomateConfig,
   countRound,
+  userRounds,
   operatorName,
   userRole,
   deviceInfo,
@@ -45,6 +47,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   onOpenPowerAutomate,
   onOpenCheckIn,
 }) => {
+  // Determine effective count round for this terminal (individual user round has priority)
+  const effectiveRound: CountRound = 
+    deviceInfo.userNumber && userRounds?.[deviceInfo.userNumber]
+      ? userRounds[deviceInfo.userNumber]
+      : countRound;
   // 5 Form Fields populated when barcode is scanned
   const [sku, setSku] = useState('');
   const [cantidad, setCantidad] = useState<number | ''>('');
@@ -81,62 +88,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     }
   }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning]);
 
-  // Global hardware scanner listener
-  useEffect(() => {
-    let fastBuffer = '';
-    let lastKeyTime = Date.now();
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // If modal is open, ignore scanner keystrokes
-      if (isConfirmUploadOpen || isConfirmRetryOpen || duplicateWarning) {
-        return;
-      }
-
-      const target = e.target as HTMLElement;
-      // If user is manually editing one of the 5 text boxes, don't hijack unless Enter is pressed
-      if (target.tagName === 'INPUT' && target.id !== 'tc26-hidden-buffer') {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-        }
-        return;
-      }
-
-      const now = Date.now();
-      if (now - lastKeyTime > 160) {
-        fastBuffer = '';
-      }
-      lastKeyTime = now;
-
-      if (e.key === 'Enter') {
-        if (fastBuffer.length > 5) {
-          e.preventDefault();
-          handleProcessBarcode(fastBuffer);
-          fastBuffer = '';
-        }
-      } else if (e.key.length === 1) {
-        fastBuffer += e.key;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, countRound, scans]);
-
   // Process scanned QR and populate the 5 text boxes
   const handleProcessBarcode = (qrString: string) => {
     const clean = qrString.trim();
     if (!clean) return;
 
-    if (countRound === 'CONTEO_FINALIZADO') {
+    if (effectiveRound === 'CONTEO_FINALIZADO') {
       soundManager.playError();
       alert('El conteo ha sido finalizado por el Gerente. Para volver a escanear, solicita autorización de Gerencia en la vista web.');
-      return;
-    }
-
-    // Check if user is authorized for 2nd count
-    if (countRound === '2DO_CONTEO' && deviceInfo.userNumber && round2Authorizations[deviceInfo.userNumber] === false) {
-      soundManager.playError();
-      alert(`El Usuario ${deviceInfo.userNumber} no ha sido habilitado por Gerencia para participar en el 2do Conteo.`);
       return;
     }
 
@@ -158,7 +117,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
     // Check for duplicate in current count round
     const existingInRound = scans.filter(
-      (s) => s.sku === parsed.sku && s.conteoRound === countRound
+      (s) => s.sku === parsed.sku && s.conteoRound === effectiveRound
     );
 
     if (existingInRound.length > 0) {
@@ -177,18 +136,125 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     if (hardwareInputRef.current) {
       hardwareInputRef.current.value = '';
     }
+
+    // Dismiss active input focus so virtual keyboard closes and user can review the 5 cards
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
   };
+
+  // Intercept any full QR barcode payload (pasted, typed, or injected by DataWedge)
+  const tryParseAndDistribute = (value: string): boolean => {
+    const trimmed = (value || '').trim();
+    if (!trimmed) return false;
+
+    // Check if it has 5 or more parts separated by underscore
+    const parts = trimmed.split('_');
+    if (parts.length >= 5) {
+      const parsed = parseInventoryQr(trimmed);
+      if (parsed.isValid) {
+        handleProcessBarcode(trimmed);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Global hardware scanner listener
+  useEffect(() => {
+    let fastBuffer = '';
+    let lastKeyTime = Date.now();
+    let burstTimer: NodeJS.Timeout | null = null;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // If modal is open, ignore scanner keystrokes
+      if (isConfirmUploadOpen || isConfirmRetryOpen || duplicateWarning) {
+        return;
+      }
+
+      const target = e.target as HTMLElement;
+      const isInput = target && target.tagName === 'INPUT';
+
+      const now = Date.now();
+      const timeSinceLastKey = now - lastKeyTime;
+      lastKeyTime = now;
+
+      // If time between keys is large (>180ms), reset the fast burst buffer
+      if (timeSinceLastKey > 180) {
+        fastBuffer = '';
+      }
+
+      // If Enter key is pressed (sent by DataWedge suffix or user)
+      if (e.key === 'Enter') {
+        // 1. Check if the focused input element has a full QR string
+        if (isInput && (target as HTMLInputElement).value) {
+          const val = (target as HTMLInputElement).value;
+          if (tryParseAndDistribute(val)) {
+            e.preventDefault();
+            e.stopPropagation();
+            fastBuffer = '';
+            (target as HTMLInputElement).blur();
+            return;
+          }
+        }
+
+        // 2. Check if our fastBuffer has a full QR string
+        if (fastBuffer.length > 5) {
+          if (tryParseAndDistribute(fastBuffer)) {
+            e.preventDefault();
+            e.stopPropagation();
+            fastBuffer = '';
+            if (isInput) (target as HTMLInputElement).blur();
+            return;
+          }
+        }
+
+        // Prevent default form submit on Enter
+        if (isInput) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // If printable character
+      if (e.key.length === 1) {
+        fastBuffer += e.key;
+
+        // Clear any existing burst timer
+        if (burstTimer) {
+          clearTimeout(burstTimer);
+          burstTimer = null;
+        }
+
+        // Check if fastBuffer already contains 5 parts with underscores
+        if (fastBuffer.includes('_') && fastBuffer.split('_').length >= 5) {
+          // Debounce slightly (80ms) to allow the last segment to finish typing, then distribute
+          burstTimer = setTimeout(() => {
+            if (fastBuffer.split('_').length >= 5) {
+              const parsed = parseInventoryQr(fastBuffer);
+              if (parsed.isValid) {
+                handleProcessBarcode(fastBuffer);
+                fastBuffer = '';
+                if (document.activeElement instanceof HTMLElement) {
+                  document.activeElement.blur();
+                }
+              }
+            }
+          }, 80);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      if (burstTimer) clearTimeout(burstTimer);
+    };
+  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, effectiveRound, scans]);
 
   // Execute upload after confirmation
   const handleConfirmUpload = async () => {
     if (!sku || cantidad === '' || !localizador) return;
-
-    // Check authorization once more before upload
-    if (countRound === '2DO_CONTEO' && deviceInfo.userNumber && round2Authorizations[deviceInfo.userNumber] === false) {
-      soundManager.playError();
-      alert(`El Usuario ${deviceInfo.userNumber} no está habilitado para el 2do Conteo.`);
-      return;
-    }
 
     setIsUploading(true);
     setIsConfirmUploadOpen(false);
@@ -204,7 +270,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         descripcion: descripcion.trim(),
         subinventario: subinventario.trim(),
         localizador: localizador.trim(),
-        conteoRound: countRound,
+        conteoRound: effectiveRound,
         rawQr: rawQrScanned || `${sku}_${cantidad}_${descripcion}_${subinventario}_${localizador}`,
         timestamp: new Date().toISOString(),
         operador: userExcelVal,
@@ -262,18 +328,19 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const hasDataInBoxes = Boolean(sku || cantidad !== '' || descripcion || localizador);
 
   const getRoundDisplay = () => {
-    if (countRound === '1ER_CONTEO') return { label: '1er Conteo', color: 'text-emerald-400 bg-emerald-950/50 border-emerald-500/40' };
-    if (countRound === '2DO_CONTEO') return { label: '2do Conteo (Verificación)', color: 'text-blue-400 bg-blue-950/50 border-blue-500/40' };
-    if (countRound === '3ER_CONTEO') return { label: '3er Conteo Extraordinario', color: 'text-amber-400 bg-amber-950/50 border-amber-500/40' };
+    if (effectiveRound === '1ER_CONTEO') return { label: '1er Conteo', color: 'text-emerald-400 bg-emerald-950/50 border-emerald-500/40' };
+    if (effectiveRound === '2DO_CONTEO') return { label: '2do Conteo (Individual)', color: 'text-blue-400 bg-blue-950/50 border-blue-500/40' };
+    if (effectiveRound === '3ER_CONTEO') return { label: '3er Conteo Extraordinario', color: 'text-amber-400 bg-amber-950/50 border-amber-500/40' };
     return { label: 'Conteo Finalizado', color: 'text-rose-400 bg-rose-950/50 border-rose-500/40' };
   };
 
   const currentRoundDisplay = getRoundDisplay();
 
   const isBlockedInRound2 = 
-    countRound === '2DO_CONTEO' && 
+    effectiveRound === '2DO_CONTEO' && 
     Boolean(deviceInfo.userNumber) && 
-    round2Authorizations[deviceInfo.userNumber!] === false;
+    round2Authorizations[deviceInfo.userNumber!] === false &&
+    userRounds?.[deviceInfo.userNumber!] !== '2DO_CONTEO';
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
@@ -283,11 +350,23 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         ref={hardwareInputRef}
         type="text"
         value={hardwareBuffer}
-        onChange={(e) => setHardwareBuffer(e.target.value)}
+        onChange={(e) => {
+          const val = e.target.value;
+          setHardwareBuffer(val);
+          if (val.split('_').length >= 5) {
+            if (tryParseAndDistribute(val)) {
+              setHardwareBuffer('');
+            }
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            handleProcessBarcode(hardwareBuffer);
+            if (tryParseAndDistribute(hardwareBuffer)) {
+              setHardwareBuffer('');
+            } else {
+              handleProcessBarcode(hardwareBuffer);
+            }
           }
         }}
         className="opacity-0 absolute -z-10 pointer-events-none"
@@ -396,13 +475,40 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
         {/* 1. SKU */}
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
-            SKU / Código del Producto:
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label htmlFor="field-sku" className="block text-xs font-semibold text-slate-300 leading-normal">
+              SKU / Código del Producto:
+            </label>
+            {sku.includes('_') && (
+              <button
+                type="button"
+                onClick={() => tryParseAndDistribute(sku)}
+                className="text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/40 active:scale-95 transition-all animate-pulse flex items-center gap-1"
+              >
+                <span>⚡</span>
+                <span>Desglosar QR ({sku.split('_').length} partes)</span>
+              </button>
+            )}
+          </div>
           <input
+            id="field-sku"
             type="text"
             value={sku}
-            onChange={(e) => setSku(e.target.value.toUpperCase())}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val.split('_').length >= 5) {
+                if (tryParseAndDistribute(val)) return;
+              }
+              setSku(val.toUpperCase());
+            }}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text');
+              if (text && text.split('_').length >= 5) {
+                if (tryParseAndDistribute(text)) {
+                  e.preventDefault();
+                }
+              }
+            }}
             placeholder="Esperando escaneo con láser..."
             className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-base sm:text-lg font-bold text-amber-400 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
           />
@@ -410,13 +516,28 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
         {/* 2. Cantidad de piezas */}
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
+          <label htmlFor="field-cantidad" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
             Cantidad de Piezas:
           </label>
           <input
+            id="field-cantidad"
             type="number"
             value={cantidad}
-            onChange={(e) => setCantidad(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val.includes('_') && val.split('_').length >= 5) {
+                if (tryParseAndDistribute(val)) return;
+              }
+              setCantidad(val === '' ? '' : Math.max(0, parseInt(val, 10) || 0));
+            }}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text');
+              if (text && text.split('_').length >= 5) {
+                if (tryParseAndDistribute(text)) {
+                  e.preventDefault();
+                }
+              }
+            }}
             placeholder="0"
             className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-base sm:text-lg font-bold text-white placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
           />
@@ -424,13 +545,28 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
         {/* 3. Descripción */}
         <div>
-          <label className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
+          <label htmlFor="field-descripcion" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
             Descripción:
           </label>
           <input
+            id="field-descripcion"
             type="text"
             value={descripcion}
-            onChange={(e) => setDescripcion(e.target.value.toUpperCase())}
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val.includes('_') && val.split('_').length >= 5) {
+                if (tryParseAndDistribute(val)) return;
+              }
+              setDescripcion(val.toUpperCase());
+            }}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text');
+              if (text && text.split('_').length >= 5) {
+                if (tryParseAndDistribute(text)) {
+                  e.preventDefault();
+                }
+              }
+            }}
             placeholder="Descripción del producto..."
             className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-200 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
           />
@@ -439,26 +575,56 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         {/* 4 & 5. Subinventario y Localizador */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
+            <label htmlFor="field-subinventario" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
               Subinventario:
             </label>
             <input
+              id="field-subinventario"
               type="text"
               value={subinventario}
-              onChange={(e) => setSubinventario(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val.includes('_') && val.split('_').length >= 5) {
+                  if (tryParseAndDistribute(val)) return;
+                }
+                setSubinventario(val.toUpperCase());
+              }}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                if (text && text.split('_').length >= 5) {
+                  if (tryParseAndDistribute(text)) {
+                    e.preventDefault();
+                  }
+                }
+              }}
               placeholder="Ej. LINEA"
               className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-xs sm:text-sm font-bold text-slate-200 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
+            <label htmlFor="field-localizador" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
               Localizador (Rack / Bin):
             </label>
             <input
+              id="field-localizador"
               type="text"
               value={localizador}
-              onChange={(e) => setLocalizador(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val.includes('_') && val.split('_').length >= 5) {
+                  if (tryParseAndDistribute(val)) return;
+                }
+                setLocalizador(val.toUpperCase());
+              }}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                if (text && text.split('_').length >= 5) {
+                  if (tryParseAndDistribute(text)) {
+                    e.preventDefault();
+                  }
+                }
+              }}
               placeholder="Ej. A-1-3"
               className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-xs sm:text-sm font-bold text-emerald-400 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
             />

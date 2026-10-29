@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   MASTER_PIN: 'tc26_master_pin_v2',
   DEVICE_INFO: 'tc26_device_info_v4',
   ROUND2_AUTH: 'tc26_round2_authorizations_v2',
+  USER_ROUNDS: 'tc26_user_rounds_v3',
 };
 
 export const DEFAULT_CONFIG: PowerAutomateConfig = {
@@ -164,6 +165,40 @@ export function saveRound2Authorizations(authMap: Record<number, boolean>): void
   }
 }
 
+export function loadUserRounds(): Record<number, CountRound> {
+  const defaults: Record<number, CountRound> = {
+    1: '1ER_CONTEO',
+    2: '1ER_CONTEO',
+    3: '1ER_CONTEO',
+    4: '1ER_CONTEO',
+    5: '1ER_CONTEO',
+    6: '1ER_CONTEO',
+    7: '1ER_CONTEO',
+    8: '1ER_CONTEO',
+    9: '1ER_CONTEO',
+    10: '1ER_CONTEO',
+  };
+  if (typeof window === 'undefined') return defaults;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.USER_ROUNDS);
+    if (raw) {
+      return { ...defaults, ...JSON.parse(raw) };
+    }
+  } catch {
+    // fallback
+  }
+  return defaults;
+}
+
+export function saveUserRounds(userRounds: Record<number, CountRound>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.USER_ROUNDS, JSON.stringify(userRounds));
+  } catch {
+    // ignore
+  }
+}
+
 export function loadDeviceInfo(): DeviceInfo {
   if (typeof window === 'undefined') {
     return {
@@ -239,19 +274,24 @@ export function saveOperatorName(name: string): void {
 export function computeDeviceSummaries(
   scans: ScannedItem[],
   currentDevice?: DeviceInfo,
-  currentRound: CountRound = '1ER_CONTEO'
+  currentRound: CountRound = '1ER_CONTEO',
+  userRounds?: Record<number, CountRound>
 ): DeviceStatusSummary[] {
   const map = new Map<string, DeviceStatusSummary>();
 
   // If current device exists, register it first
   if (currentDevice) {
     const key = currentDevice.deviceName;
+    const effectiveDevRound = (currentDevice.userNumber && userRounds?.[currentDevice.userNumber])
+      ? userRounds[currentDevice.userNumber]
+      : currentRound;
+
     map.set(key, {
       deviceId: currentDevice.deviceId,
       deviceName: currentDevice.deviceName,
       operatorName: currentDevice.operatorName || (currentDevice.userNumber ? `Usuario ${currentDevice.userNumber}` : 'Sin asignar'),
       userNumber: currentDevice.userNumber,
-      currentRound: currentRound,
+      currentRound: effectiveDevRound,
       totalPieces: 0,
       totalScans: 0,
       lastActive: new Date().toISOString(),

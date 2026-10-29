@@ -1,20 +1,20 @@
 {
-  "id": "/",
-  "name": "ScanF",
   "short_name": "ScanF",
-  "description": "ScanF - Terminal de escaneo industrial para Zebra TC26 con sincronización a SharePoint Excel.",
-  "start_url": "/",
-  "scope": "/",
-  "display": "standalone",
-  "orientation": "portrait",
-  "theme_color": "#020617",
-  "background_color": "#020617",
+  "name": "ScanF",
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
-      "purpose": "any"
+      "src": "./icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "./icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
     }
-  ]
+  ],
+  "start_url": "./",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone"
 }
