@@ -10,10 +10,11 @@ const STORAGE_KEYS = {
   DEVICE_INFO: 'tc26_device_info_v4',
   ROUND2_AUTH: 'tc26_round2_authorizations_v2',
   USER_ROUNDS: 'tc26_user_rounds_v3',
+  IS_APK: 'tc26_is_apk_mode_v1',
 };
 
 export const DEFAULT_CONFIG: PowerAutomateConfig = {
-  webhookUrl: 'https://defaultaa53848cce8346e7a4f67e95722c78.ff.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/03/workflows/2a1f4e5624d6473191e1243e7582b634/triggers/manual/paths/invoke?api-version=1',
+  webhookUrl: 'https://defaultaa53848cce8346e7a4f67e95722c78.ff.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/03/workflows/2a1f4e5624d6473191e1243e7582b634/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=3v5hb8UU1C-4RCT_fp4x-xbkPTSt4C9F-Nn1WVhBLnc',
   isEnabled: true,
   sharepointSiteUrl: 'https://cvdirectomexico-my.sharepoint.com/personal/darien_perez_cvdirecto_mx',
   excelFileName: 'Scaneo fiscal 2026.xlsx',
@@ -32,10 +33,70 @@ export const DEFAULT_SUPABASE_CONFIG: SupabaseConfig = {
 
 export function isRunningInApkOrStandalone(): boolean {
   if (typeof window === 'undefined') return false;
-  return (
+
+  // 1. Explicitly saved in localStorage
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.IS_APK);
+    if (saved === 'true') return true;
+    if (saved === 'false') return false;
+  } catch {
+    // ignore
+  }
+
+  // 2. URL parameter indicator (e.g. ?mode=apk, ?apk=1, ?source=pwa, ?twa=1)
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (
+      params.get('mode') === 'apk' ||
+      params.get('apk') === 'true' ||
+      params.get('apk') === '1' ||
+      params.get('source') === 'pwa' ||
+      params.get('twa') === '1'
+    ) {
+      try { localStorage.setItem(STORAGE_KEYS.IS_APK, 'true'); } catch {}
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. Android App TWA / PWA referrer header
+  if (typeof document !== 'undefined' && document.referrer && document.referrer.startsWith('android-app://')) {
+    try { localStorage.setItem(STORAGE_KEYS.IS_APK, 'true'); } catch {}
+    return true;
+  }
+
+  // 4. Standalone, fullscreen or minimal-ui display modes (standard PWA / TWA wrapper)
+  const isDisplayStandalone =
     window.matchMedia('(display-mode: standalone)').matches ||
-    (window.navigator as unknown as { standalone?: boolean }).standalone === true
-  );
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+
+  if (isDisplayStandalone) {
+    try { localStorage.setItem(STORAGE_KEYS.IS_APK, 'true'); } catch {}
+    return true;
+  }
+
+  // 5. Android WebView detection (PWABuilder Android APK wrapper uses WebView / TWA)
+  const ua = window.navigator.userAgent || '';
+  const isAndroid = /Android/i.test(ua);
+  const isWebView = /; wv\)|Version\/[0-9.]+\s+(?:Mobile\s+)?Safari\/[0-9.]+/i.test(ua) || /\bTWA\b/i.test(ua);
+  if (isAndroid && isWebView) {
+    try { localStorage.setItem(STORAGE_KEYS.IS_APK, 'true'); } catch {}
+    return true;
+  }
+
+  return false;
+}
+
+export function setExplicitApkMode(isApk: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.IS_APK, String(isApk));
+  } catch {
+    // ignore
+  }
 }
 
 export function loadScans(): ScannedItem[] {
@@ -57,13 +118,19 @@ export function saveScans(scans: ScannedItem[]): void {
   }
 }
 
+export function normalizeRound(r: string | undefined | null): CountRound {
+  if (!r) return '1ER_CONTEO';
+  const clean = String(r).trim().toUpperCase();
+  if (clean.includes('2') || clean.includes('SEGUNDO') || clean === '2DO_CONTEO') return '2DO_CONTEO';
+  if (clean.includes('3') || clean.includes('TERCER') || clean === '3ER_CONTEO') return '3ER_CONTEO';
+  if (clean.includes('FIN') || clean === 'CONTEO_FINALIZADO') return 'CONTEO_FINALIZADO';
+  return '1ER_CONTEO';
+}
+
 export function loadCountRound(): CountRound {
   if (typeof window === 'undefined') return '1ER_CONTEO';
   const val = localStorage.getItem(STORAGE_KEYS.COUNT_ROUND);
-  if (val === '2DO_CONTEO' || val === '3ER_CONTEO' || val === 'CONTEO_FINALIZADO') {
-    return val;
-  }
-  return '1ER_CONTEO';
+  return normalizeRound(val);
 }
 
 export function saveCountRound(round: CountRound): void {
@@ -87,10 +154,14 @@ export function loadPowerAutomateConfig(): PowerAutomateConfig {
     const raw = localStorage.getItem(STORAGE_KEYS.CONFIG);
     if (!raw) return DEFAULT_CONFIG;
     const parsed = JSON.parse(raw);
+    const validUrl =
+      parsed.webhookUrl && parsed.webhookUrl.trim() && parsed.webhookUrl.includes('sig=')
+        ? parsed.webhookUrl
+        : DEFAULT_CONFIG.webhookUrl;
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
-      webhookUrl: parsed.webhookUrl && parsed.webhookUrl.trim() ? parsed.webhookUrl : DEFAULT_CONFIG.webhookUrl,
+      webhookUrl: validUrl,
       excelFileDirectUrl:
         parsed.excelFileDirectUrl && !parsed.excelFileDirectUrl.includes('tuempresa.sharepoint.com')
           ? parsed.excelFileDirectUrl
@@ -280,65 +351,64 @@ export function computeDeviceSummaries(
 ): DeviceStatusSummary[] {
   const map = new Map<string, DeviceStatusSummary>();
 
-  // 1. Incorporate cloud terminal sessions from Supabase
+  // 1. Incorporate authoritative cloud terminal sessions from Supabase
   if (cloudSessions && cloudSessions.length > 0) {
     for (const session of cloudSessions) {
-      const key = session.userNumber ? `Usuario ${session.userNumber}` : (session.deviceId || session.deviceName);
+      const key = session.deviceId || (session.userNumber ? `Usuario ${session.userNumber}` : session.deviceName);
       map.set(key, { ...session });
     }
   }
 
-  // 2. If current device exists, register or update it
-  if (currentDevice && currentDevice.userNumber) {
-    const key = `Usuario ${currentDevice.userNumber}`;
+  // 2. Only add local device if it has an active assigned operator user
+  if (currentDevice && currentDevice.userNumber && currentDevice.isUserNumberLocked) {
+    const key = currentDevice.deviceId || `Usuario ${currentDevice.userNumber}`;
     const effectiveDevRound = (currentDevice.userNumber && userRounds?.[currentDevice.userNumber])
       ? userRounds[currentDevice.userNumber]
       : currentRound;
 
     const existing = map.get(key);
-    map.set(key, {
-      deviceId: currentDevice.deviceId,
-      deviceName: currentDevice.deviceName,
-      operatorName: currentDevice.operatorName || `Usuario ${currentDevice.userNumber}`,
-      userNumber: currentDevice.userNumber,
-      currentRound: effectiveDevRound,
-      totalPieces: existing ? existing.totalPieces : 0,
-      totalScans: existing ? existing.totalScans : 0,
-      lastActive: new Date().toISOString(),
-      lastSku: existing?.lastSku,
-      lastLocator: existing?.lastLocator,
-    });
+    if (!existing && (!cloudSessions || cloudSessions.length === 0)) {
+      map.set(key, {
+        deviceId: currentDevice.deviceId,
+        deviceName: currentDevice.deviceName,
+        operatorName: currentDevice.operatorName || `Usuario ${currentDevice.userNumber}`,
+        userNumber: currentDevice.userNumber,
+        currentRound: effectiveDevRound,
+        totalPieces: 0,
+        totalScans: 0,
+        lastActive: new Date().toISOString(),
+      });
+    }
   }
 
-  // 3. Iterate scans to update actual counts and latest sku
-  for (const scan of scans) {
-    const devKey = scan.userNumber ? `Usuario ${scan.userNumber}` : (scan.dispositivo || scan.operador || 'Dispositivo');
-    const existing = map.get(devKey);
+  // 3. Only synthesize from scans if cloudSessions was not provided
+  if (!cloudSessions && scans.length > 0) {
+    for (const scan of scans) {
+      const devKey = scan.userNumber ? `Usuario ${scan.userNumber}` : (scan.dispositivo || scan.operador || 'Dispositivo');
+      const existing = map.get(devKey);
 
-    if (!existing) {
-      map.set(devKey, {
-        deviceId: devKey.startsWith('TC26') ? devKey.split(' ')[0] : 'TC26',
-        deviceName: devKey,
-        operatorName: scan.nombreOperadorCompleto || scan.operador || 'Operador',
-        userNumber: scan.userNumber,
-        currentRound: scan.conteoRound,
-        totalPieces: scan.cantidad,
-        totalScans: 1,
-        lastActive: scan.timestamp,
-        lastSku: scan.sku,
-        lastLocator: scan.localizador,
-      });
-    } else {
-      // If not already accumulated from cloud, increment
-      if (!cloudSessions || cloudSessions.length === 0) {
+      if (!existing) {
+        map.set(devKey, {
+          deviceId: devKey.startsWith('TC26') ? devKey.split(' ')[0] : 'TC26',
+          deviceName: devKey,
+          operatorName: scan.nombreOperadorCompleto || scan.operador || 'Operador',
+          userNumber: scan.userNumber,
+          currentRound: scan.conteoRound,
+          totalPieces: scan.cantidad,
+          totalScans: 1,
+          lastActive: scan.timestamp,
+          lastSku: scan.sku,
+          lastLocator: scan.localizador,
+        });
+      } else {
         existing.totalPieces = (existing.totalPieces || 0) + scan.cantidad;
         existing.totalScans = (existing.totalScans || 0) + 1;
-      }
-      if (!existing.lastSku) {
-        existing.lastSku = scan.sku;
-        existing.lastLocator = scan.localizador;
-        existing.currentRound = scan.conteoRound;
-        existing.lastActive = scan.timestamp;
+        if (!existing.lastSku) {
+          existing.lastSku = scan.sku;
+          existing.lastLocator = scan.localizador;
+          existing.currentRound = scan.conteoRound;
+          existing.lastActive = scan.timestamp;
+        }
       }
     }
   }

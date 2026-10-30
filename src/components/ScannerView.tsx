@@ -15,6 +15,7 @@ import confetti from 'canvas-confetti';
 import { CountRound, ScannedItem, PowerAutomateConfig, UserRole, DeviceInfo } from '../types/inventory';
 import { parseInventoryQr } from '../utils/qrParser';
 import { soundManager } from '../utils/audioHaptics';
+import { normalizeRound } from '../utils/storage';
 
 interface ScannerViewProps {
   onScanComplete: (item: ScannedItem) => Promise<void>;
@@ -107,20 +108,23 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       return;
     }
 
-    // Populate the 5 text boxes immediately
-    setSku(parsed.sku);
-    setCantidad(parsed.cantidad);
-    setDescripcion(parsed.descripcion);
-    setSubinventario(parsed.subinventario);
-    setLocalizador(parsed.localizador);
-    setRawQrScanned(clean);
-
-    // Check for duplicate LOCALIZADOR in current count round (per user requirement)
+    // Check for duplicate LOCALIZADOR in current count round (isolated per count round)
+    const normalizedEffectiveRound = normalizeRound(effectiveRound);
     const existingInRound = scans.filter(
-      (s) => s.localizador.trim().toUpperCase() === parsed.localizador.trim().toUpperCase() && s.conteoRound === effectiveRound
+      (s) =>
+        s.localizador.trim().toUpperCase() === parsed.localizador.trim().toUpperCase() &&
+        normalizeRound(s.conteoRound) === normalizedEffectiveRound
     );
 
     if (existingInRound.length > 0) {
+      // Clear fields immediately so duplicate QR data is erased and cannot be uploaded
+      setSku('');
+      setCantidad('');
+      setDescripcion('');
+      setSubinventario('');
+      setLocalizador('');
+      setRawQrScanned('');
+
       soundManager.playWarning();
       setDuplicateWarning({
         sku: parsed.sku,
@@ -128,6 +132,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         prevTime: new Date(existingInRound[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       });
     } else {
+      // Populate the 5 text boxes only for non-duplicated QRs
+      setSku(parsed.sku);
+      setCantidad(parsed.cantidad);
+      setDescripcion(parsed.descripcion);
+      setSubinventario(parsed.subinventario);
+      setLocalizador(parsed.localizador);
+      setRawQrScanned(clean);
       soundManager.playSuccess();
     }
 
@@ -256,44 +267,71 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const handleConfirmUpload = async () => {
     if (!sku || cantidad === '' || !localizador) return;
 
-    setIsUploading(true);
+    // Double check that localizador was not already scanned in this round (canonical comparison)
+    const normalizedEffectiveRound = normalizeRound(effectiveRound);
+    const existingInRound = scans.filter(
+      (s) =>
+        s.localizador.trim().toUpperCase() === localizador.trim().toUpperCase() &&
+        normalizeRound(s.conteoRound) === normalizedEffectiveRound
+    );
+    if (existingInRound.length > 0) {
+      handleClearBoxes();
+      setIsConfirmUploadOpen(false);
+      soundManager.playWarning();
+      setDuplicateWarning({
+        sku: sku.trim(),
+        localizador: localizador.trim(),
+        prevTime: new Date(existingInRound[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+      return;
+    }
+
+    // Dismiss dialog immediately to free UI
     setIsConfirmUploadOpen(false);
 
     // El número de usuario es el que se plasma en el archivo de Excel en la columna de usuario
     const userExcelVal = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : (deviceInfo.operatorName || 'Usuario 1');
 
+    const newItem: ScannedItem = {
+      id: 'SC-' + Date.now().toString(36).toUpperCase(),
+      sku: sku.trim(),
+      cantidad: Number(cantidad),
+      descripcion: descripcion.trim(),
+      subinventario: subinventario.trim(),
+      localizador: localizador.trim(),
+      conteoRound: effectiveRound,
+      rawQr: rawQrScanned || `${sku}_${cantidad}_${descripcion}_${subinventario}_${localizador}`,
+      timestamp: new Date().toISOString(),
+      operador: userExcelVal,
+      nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
+      userNumber: deviceInfo.userNumber,
+      dispositivo: deviceInfo.deviceName || 'Zebra TC26',
+      syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
+    };
+
+    const uploadedSku = sku.trim();
+    const uploadedQty = cantidad;
+
+    // Clear boxes immediately and refocus scanner so next scan is ready in < 50ms
+    handleClearBoxes();
+    refocusScanner();
+
+    confetti({
+      particleCount: 20,
+      spread: 40,
+      origin: { y: 0.8 },
+      colors: ['#10b981', '#f59e0b'],
+    });
+
+    setUploadFeedback(`✓ ${uploadedSku} (${uploadedQty} pzs) registrado. Guardando en Excel...`);
+    setTimeout(() => setUploadFeedback(null), 3000);
+
+    // Run upload without locking down UI interactions
+    setIsUploading(true);
     try {
-      const newItem: ScannedItem = {
-        id: 'SC-' + Date.now().toString(36).toUpperCase(),
-        sku: sku.trim(),
-        cantidad: Number(cantidad),
-        descripcion: descripcion.trim(),
-        subinventario: subinventario.trim(),
-        localizador: localizador.trim(),
-        conteoRound: effectiveRound,
-        rawQr: rawQrScanned || `${sku}_${cantidad}_${descripcion}_${subinventario}_${localizador}`,
-        timestamp: new Date().toISOString(),
-        operador: userExcelVal,
-        nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
-        userNumber: deviceInfo.userNumber,
-        dispositivo: deviceInfo.deviceName || 'Zebra TC26',
-        syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
-      };
-
       await onScanComplete(newItem);
-
-      confetti({
-        particleCount: 20,
-        spread: 40,
-        origin: { y: 0.8 },
-        colors: ['#10b981', '#f59e0b'],
-      });
-
-      setUploadFeedback(`✓ ${sku} (${cantidad} pzs) subido exitosamente a Excel.`);
-      setTimeout(() => setUploadFeedback(null), 3000);
-
-      // Clear the 5 text boxes for the next scan
-      handleClearBoxes();
+    } catch {
+      // Background sync will update status
     } finally {
       setIsUploading(false);
       refocusScanner();
@@ -317,12 +355,16 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   };
 
   const refocusScanner = () => {
+    // Dismiss any virtual soft keyboard on handheld by blurring active elements
+    if (document.activeElement && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     setTimeout(() => {
       if (hardwareInputRef.current) {
         hardwareInputRef.current.value = '';
-        hardwareInputRef.current.focus();
+        hardwareInputRef.current.focus({ preventScroll: true });
       }
-    }, 80);
+    }, 60);
   };
 
   const hasDataInBoxes = Boolean(sku || cantidad !== '' || descripcion || localizador);
@@ -344,11 +386,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
-      {/* Hidden Buffer Input for TC26 Hardware Laser */}
+      {/* Hidden Buffer Input for TC26 Hardware Laser (inputMode="none" prevents soft keyboard from appearing) */}
       <input
         id="tc26-hidden-buffer"
         ref={hardwareInputRef}
         type="text"
+        inputMode="none"
+        tabIndex={-1}
         value={hardwareBuffer}
         onChange={(e) => {
           const val = e.target.value;
@@ -483,11 +527,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </span>
           </div>
 
-        {/* 1. SKU */}
+        {/* 1. SKU (Bloqueado contra edición y selección manual) */}
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label htmlFor="field-sku" className="block text-xs font-semibold text-slate-300 leading-normal">
-              SKU / Código del Producto:
+            <label htmlFor="field-sku" className="block text-xs font-semibold text-slate-300 leading-normal flex items-center gap-1.5">
+              <span>SKU / Código del Producto:</span>
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">🔒 Bloqueado</span>
             </label>
             {sku.includes('_') && (
               <button
@@ -503,35 +548,27 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <input
             id="field-sku"
             type="text"
+            readOnly
+            tabIndex={-1}
             value={sku}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (val.split('_').length >= 5) {
-                if (tryParseAndDistribute(val)) return;
-              }
-              setSku(val.toUpperCase());
-            }}
-            onPaste={(e) => {
-              const text = e.clipboardData.getData('text');
-              if (text && text.split('_').length >= 5) {
-                if (tryParseAndDistribute(text)) {
-                  e.preventDefault();
-                }
-              }
-            }}
+            onFocus={(e) => e.target.blur()}
+            onTouchStart={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
             placeholder="Esperando escaneo con láser..."
-            className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-base sm:text-lg font-bold text-amber-400 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
+            className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-900/70 border border-slate-700/80 rounded-xl font-mono text-base sm:text-lg font-bold text-amber-400 placeholder:text-slate-600 focus:outline-none select-none cursor-default leading-normal pointer-events-none"
           />
         </div>
 
-        {/* 2. Cantidad de piezas */}
+        {/* 2. Cantidad de piezas (Habilitada para edición si requiere ajuste) */}
         <div>
-          <label htmlFor="field-cantidad" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
-            Cantidad de Piezas:
+          <label htmlFor="field-cantidad" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal flex items-center justify-between">
+            <span>Cantidad de Piezas:</span>
+            <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">✏️ Editable</span>
           </label>
           <input
             id="field-cantidad"
             type="number"
+            inputMode="numeric"
             value={cantidad}
             onChange={(e) => {
               const val = e.target.value;
@@ -553,40 +590,32 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           />
         </div>
 
-        {/* 3. Descripción */}
+        {/* 3. Descripción (Bloqueada contra edición manual) */}
         <div>
-          <label htmlFor="field-descripcion" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
-            Descripción:
+          <label htmlFor="field-descripcion" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal flex items-center gap-1.5">
+            <span>Descripción:</span>
+            <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">🔒 Bloqueado</span>
           </label>
           <input
             id="field-descripcion"
             type="text"
+            readOnly
+            tabIndex={-1}
             value={descripcion}
-            onChange={(e) => {
-              const val = e.target.value;
-              if (val.includes('_') && val.split('_').length >= 5) {
-                if (tryParseAndDistribute(val)) return;
-              }
-              setDescripcion(val.toUpperCase());
-            }}
-            onPaste={(e) => {
-              const text = e.clipboardData.getData('text');
-              if (text && text.split('_').length >= 5) {
-                if (tryParseAndDistribute(text)) {
-                  e.preventDefault();
-                }
-              }
-            }}
-            placeholder="Descripción del producto..."
-            className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl text-xs sm:text-sm font-semibold text-slate-200 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
+            onFocus={(e) => e.target.blur()}
+            onTouchStart={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
+            placeholder="Descripción obtenida del código QR..."
+            className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-900/70 border border-slate-700/80 rounded-xl text-xs sm:text-sm font-semibold text-slate-300 placeholder:text-slate-600 focus:outline-none select-none cursor-default leading-normal pointer-events-none"
           />
         </div>
 
         {/* 4 & 5. Subinventario y Localizador */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label htmlFor="field-subinventario" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
-              Subinventario:
+            <label htmlFor="field-subinventario" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal flex items-center justify-between">
+              <span>Subinventario:</span>
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">✏️ Editable</span>
             </label>
             <input
               id="field-subinventario"
@@ -613,30 +642,21 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           </div>
 
           <div>
-            <label htmlFor="field-localizador" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal">
-              Localizador (Rack / Bin):
+            <label htmlFor="field-localizador" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal flex items-center gap-1.5">
+              <span>Localizador (Rack / Bin):</span>
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">🔒 Bloqueado</span>
             </label>
             <input
               id="field-localizador"
               type="text"
+              readOnly
+              tabIndex={-1}
               value={localizador}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (val.includes('_') && val.split('_').length >= 5) {
-                  if (tryParseAndDistribute(val)) return;
-                }
-                setLocalizador(val.toUpperCase());
-              }}
-              onPaste={(e) => {
-                const text = e.clipboardData.getData('text');
-                if (text && text.split('_').length >= 5) {
-                  if (tryParseAndDistribute(text)) {
-                    e.preventDefault();
-                  }
-                }
-              }}
+              onFocus={(e) => e.target.blur()}
+              onTouchStart={(e) => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
               placeholder="Ej. A-1-3"
-              className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-xs sm:text-sm font-bold text-emerald-400 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
+              className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-900/70 border border-slate-700/80 rounded-xl font-mono text-xs sm:text-sm font-bold text-emerald-400 placeholder:text-slate-600 focus:outline-none select-none cursor-default leading-normal pointer-events-none"
             />
           </div>
         </div>
@@ -814,8 +834,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               <h3 className="text-base font-bold text-white tracking-tight leading-snug">
                 El Localizador {duplicateWarning.localizador} ya fue escaneado en esta ronda
               </h3>
+              <p className="text-xs text-amber-300 font-semibold leading-relaxed">
+                ¡Información eliminada automáticamente de los cuadros para evitar duplicados en Excel y Supabase!
+              </p>
               <p className="text-xs text-slate-400 leading-normal">
-                Esta ubicación ya tiene un registro previo en esta ronda a las <strong>{duplicateWarning.prevTime}</strong> (SKU: {duplicateWarning.sku}).
+                Ubicación registrada previamente a las <strong>{duplicateWarning.prevTime}</strong> (SKU: {duplicateWarning.sku}).
               </p>
             </div>
 

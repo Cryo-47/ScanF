@@ -10,7 +10,7 @@ import {
   Globe
 } from 'lucide-react';
 import { CountRound, UserRole } from '../types/inventory';
-import { exportScansToCsv } from '../utils/storage';
+import { exportScansToCsv, isRunningInApkOrStandalone } from '../utils/storage';
 import { soundManager } from '../utils/audioHaptics';
 
 interface HeaderProps {
@@ -88,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Zone 2: Navigation Links (Conditioned by Role) */}
         {/* In OPERADOR_APK mode: NO TABS ARE SHOWN AT ALL (only Escáner exists) */}
-        {userRole !== 'OPERADOR_APK' && (
+        {userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone() && (
           <nav className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm font-medium overflow-x-auto py-1">
             <button
               onClick={() => setActiveTab('scanner')}
@@ -138,7 +138,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Zone 3: Status / Role Info */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Quick CSV Export if in web/history */}
-          {userRole !== 'OPERADOR_APK' && scans.length > 0 && (
+          {userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone() && scans.length > 0 && (
             <button
               onClick={() => exportScansToCsv(scans)}
               title="Descargar copia Excel (.CSV)"

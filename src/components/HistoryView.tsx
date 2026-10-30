@@ -14,7 +14,8 @@ import {
   ShieldAlert,
   X,
   Loader2,
-  Code
+  Code,
+  RotateCcw
 } from 'lucide-react';
 import { ScannedItem, PowerAutomateConfig, UserRole, DeviceStatusSummary, CountRound } from '../types/inventory';
 import { exportScansToCsv } from '../utils/storage';
@@ -46,6 +47,9 @@ interface HistoryViewProps {
   onSetAllUsersRound2?: (enabled: boolean) => void;
   onDeleteScanFromSupabase?: (scanId: string) => Promise<boolean>;
   onDeleteAllScansFromSupabase?: () => Promise<boolean>;
+  onRefreshCloudScans?: () => Promise<number>;
+  onDeleteTerminalSession?: (deviceId: string) => Promise<boolean>;
+  onClearAllTerminalSessions?: () => Promise<boolean>;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -66,11 +70,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   onSetAllUsersRound2,
   onDeleteScanFromSupabase,
   onDeleteAllScansFromSupabase,
+  onRefreshCloudScans,
+  onDeleteTerminalSession,
+  onClearAllTerminalSessions,
 }) => {
   const [search, setSearch] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
   const [isEditingLink, setIsEditingLink] = useState(false);
   const [editedLink, setEditedLink] = useState(powerAutomateConfig.excelFileDirectUrl || '');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Delete from Supabase modal states (Exclusive to MASTER)
   const [confirmDeleteModal, setConfirmDeleteModal] = useState<
@@ -83,12 +91,34 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const [copiedDeleteSql, setCopiedDeleteSql] = useState(false);
   const [deleteFeedbackToast, setDeleteFeedbackToast] = useState<string | null>(null);
 
-  const filtered = scans.filter((s) =>
-    s.sku.toLowerCase().includes(search.toLowerCase()) ||
-    s.descripcion.toLowerCase().includes(search.toLowerCase()) ||
-    s.localizador.toLowerCase().includes(search.toLowerCase()) ||
-    s.subinventario.toLowerCase().includes(search.toLowerCase())
-  );
+  const handleRefresh = async () => {
+    if (!onRefreshCloudScans) return;
+    setIsRefreshing(true);
+    try {
+      const count = await onRefreshCloudScans();
+      soundManager.playSuccess();
+      setDeleteFeedbackToast(`Sincronización completada: ${count} registros verificados en Supabase.`);
+      setTimeout(() => setDeleteFeedbackToast(null), 3500);
+    } catch (err: unknown) {
+      soundManager.playError();
+      const msg = err instanceof Error ? err.message : String(err);
+      setDeleteFeedbackToast(`Error al recargar: ${msg}`);
+      setTimeout(() => setDeleteFeedbackToast(null), 4000);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const filtered = scans.filter((s) => {
+    const q = (search || '').toLowerCase();
+    return (
+      (s.sku || '').toLowerCase().includes(q) ||
+      (s.descripcion || '').toLowerCase().includes(q) ||
+      (s.localizador || '').toLowerCase().includes(q) ||
+      (s.subinventario || '').toLowerCase().includes(q) ||
+      (s.operador || '').toLowerCase().includes(q)
+    );
+  });
 
   const totalPiezas = scans.reduce((sum, s) => sum + s.cantidad, 0);
 
@@ -297,7 +327,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       </div>
 
       {/* Control en Vivo de Terminales TC26 (Quién va por Conteo 1 y quién por Conteo 2) */}
-      <DeviceMonitoringPanel devices={deviceSummaries} />
+      <DeviceMonitoringPanel 
+        devices={deviceSummaries} 
+        userRole={userRole}
+        onDeleteTerminalSession={onDeleteTerminalSession}
+        onClearAllTerminalSessions={onClearAllTerminalSessions}
+      />
 
       {/* KPI Summary Banner */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -313,6 +348,18 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {onRefreshCloudScans && (
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="px-3.5 py-2 bg-blue-950/60 hover:bg-blue-900/60 text-blue-300 border border-blue-500/40 font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-sm active:scale-95 whitespace-nowrap"
+              title="Volver a consultar y descargar todos los escaneos desde Supabase"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-400' : 'text-blue-400'}`} />
+              <span>{isRefreshing ? 'Consultando...' : 'Recargar de Supabase'}</span>
+            </button>
+          )}
+
           <button
             onClick={() => exportScansToCsv(scans)}
             disabled={scans.length === 0}

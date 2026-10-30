@@ -36,7 +36,11 @@ import {
   deleteScanFromSupabase,
   deleteAllScansFromSupabase,
   pushRoundControl,
-  fetchRoundControl
+  fetchRoundControl,
+  pushSharepointSettings,
+  fetchSharepointSettings,
+  deleteTerminalSession,
+  clearAllTerminalSessions
 } from './utils/syncService';
 import { Header } from './components/Header';
 import { ScannerView } from './components/ScannerView';
@@ -144,7 +148,7 @@ export default function App() {
       // Fetch live terminal sessions
       try {
         const remoteSessions = await fetchTerminalSessions(supabaseConfig);
-        if (isMounted && remoteSessions.length > 0) {
+        if (isMounted) {
           setCloudTerminalSessions(remoteSessions);
         }
       } catch {
@@ -157,33 +161,31 @@ export default function App() {
         if (isMounted) {
           const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
           const remoteIds = new Set(remoteScans.map((s) => s.id));
-          
-          // Auto-save local scans to Supabase if they are not stored in Supabase yet
-          const unpushed = scans.filter(
-            (s) => !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
-          );
-          if (unpushed.length > 0) {
-            for (const item of unpushed) {
-              await pushScanToSupabase(item, supabaseConfig);
-            }
-          }
 
-          if (remoteScans.length > 0 || unpushed.length > 0) {
-            setScans((prev) => {
-              const map = new Map<string, ScannedItem>();
-              for (const s of remoteScans) map.set(s.id, s);
-              for (const s of prev) {
-                if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
-                  map.set(s.id, s);
-                }
+          setScans((prev) => {
+            // Auto-save local scans to Supabase if they are not stored in Supabase yet
+            const unpushed = prev.filter(
+              (s) => !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
+            );
+            if (unpushed.length > 0) {
+              for (const item of unpushed) {
+                pushScanToSupabase(item, supabaseConfig);
               }
-              const merged = Array.from(map.values()).sort(
-                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-              );
-              saveScans(merged);
-              return merged;
-            });
-          }
+            }
+
+            const map = new Map<string, ScannedItem>();
+            for (const s of remoteScans) map.set(s.id, s);
+            for (const s of prev) {
+              if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
+                map.set(s.id, s);
+              }
+            }
+            const merged = Array.from(map.values()).sort(
+              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+            saveScans(merged);
+            return merged;
+          });
         }
       } catch {
         // ignore
@@ -209,6 +211,30 @@ export default function App() {
             setRound2Authorizations(control.authorizations);
             saveRound2Authorizations(control.authorizations);
           }
+        }
+      } catch {
+        // ignore
+      }
+
+      // Fetch SharePoint / Power Automate settings from Supabase
+      try {
+        const remoteSharepoint = await fetchSharepointSettings(supabaseConfig);
+        if (isMounted && remoteSharepoint && remoteSharepoint.webhookUrl) {
+          setPowerAutomateConfig((prev) => {
+            if (
+              prev.webhookUrl !== remoteSharepoint.webhookUrl ||
+              prev.excelFileDirectUrl !== remoteSharepoint.excelFileDirectUrl
+            ) {
+              const merged: PowerAutomateConfig = {
+                ...prev,
+                ...remoteSharepoint,
+                webhookUrl: remoteSharepoint.webhookUrl || prev.webhookUrl,
+              };
+              savePowerAutomateConfig(merged);
+              return merged;
+            }
+            return prev;
+          });
         }
       } catch {
         // ignore
@@ -242,23 +268,21 @@ export default function App() {
     }
   }, [userRole, deviceInfo, activeDeviceRound]);
 
-  // Save new scan item
+  // Save new scan item (Optimistic & non-blocking for rapid scanning and multi-device concurrency)
   const handleScanComplete = async (item: ScannedItem) => {
-    const result = await syncScannedItem(item, powerAutomateConfig, supabaseConfig);
-
-    const updatedItem: ScannedItem = {
+    // 1. Optimistic immediate local save - returns in < 5ms, avoiding UI freezes
+    const pendingItem: ScannedItem = {
       ...item,
-      syncStateSharepoint: result.sharepointState,
-      syncError: result.errorMessage,
+      syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
     };
 
     setScans((prev) => {
-      const next = [updatedItem, ...prev];
+      const next = [pendingItem, ...prev];
       saveScans(next);
       return next;
     });
 
-    // Update presence with latest scan immediately
+    // 2. Immediate local presence update
     if (deviceInfo.userNumber) {
       pushTerminalPresence(
         deviceInfo,
@@ -270,8 +294,42 @@ export default function App() {
           lastLocator: item.localizador,
         },
         supabaseConfig
-      );
+      ).catch(() => {});
     }
+
+    // 3. Background asynchronous sync (SharePoint + Supabase) without blocking scanner
+    (async () => {
+      try {
+        const result = await syncScannedItem(item, powerAutomateConfig, supabaseConfig);
+        setScans((prev) => {
+          const next = prev.map((s) =>
+            s.id === item.id
+              ? {
+                  ...s,
+                  syncStateSharepoint: result.sharepointState,
+                  syncError: result.errorMessage,
+                }
+              : s
+          );
+          saveScans(next);
+          return next;
+        });
+      } catch (err: any) {
+        setScans((prev) => {
+          const next: ScannedItem[] = prev.map((s) =>
+            s.id === item.id
+              ? {
+                  ...s,
+                  syncStateSharepoint: 'failed' as const,
+                  syncError: err?.message || 'Error de sincronización',
+                }
+              : s
+          );
+          saveScans(next);
+          return next;
+        });
+      }
+    })();
   };
 
   // Gerente advances an individual user (1 to 10) to 2nd count, 3rd count or returns to 1st count
@@ -344,9 +402,10 @@ export default function App() {
   };
 
   // Save Power Automate config
-  const handleSavePowerAutomate = (cfg: PowerAutomateConfig) => {
+  const handleSavePowerAutomate = async (cfg: PowerAutomateConfig) => {
     setPowerAutomateConfig(cfg);
     savePowerAutomateConfig(cfg);
+    await pushSharepointSettings(cfg, supabaseConfig);
   };
 
   // Save Supabase config
@@ -397,6 +456,58 @@ export default function App() {
     if (ok) {
       setScans([]);
       saveScans([]);
+      // Clear live terminal sessions as well so live monitor does not show old counts
+      await clearAllTerminalSessions(supabaseConfig);
+      setCloudTerminalSessions([]);
+    }
+    return ok;
+  };
+
+  // Refresh scans and live terminal sessions directly from Supabase
+  const handleRefreshCloudScans = async (): Promise<number> => {
+    if (!supabaseConfig.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+      throw new Error('Supabase no está configurado o habilitado');
+    }
+    const rawRemoteScans = await fetchCloudScans(supabaseConfig);
+    const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
+    const remoteIds = new Set(remoteScans.map((s) => s.id));
+
+    setScans((prev) => {
+      const map = new Map<string, ScannedItem>();
+      for (const s of remoteScans) map.set(s.id, s);
+      for (const s of prev) {
+        if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
+          map.set(s.id, s);
+        }
+      }
+      const merged = Array.from(map.values()).sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      saveScans(merged);
+      return merged;
+    });
+
+    const sessions = await fetchTerminalSessions(supabaseConfig);
+    setCloudTerminalSessions(sessions);
+    return remoteScans.length;
+  };
+
+  // Delete single terminal session from Supabase
+  const handleDeleteTerminalSession = async (deviceId: string): Promise<boolean> => {
+    const ok = await deleteTerminalSession(deviceId, supabaseConfig);
+    if (ok) {
+      setCloudTerminalSessions((prev) =>
+        prev.filter((d) => d.deviceId !== deviceId && String(d.userNumber) !== deviceId)
+      );
+    }
+    return ok;
+  };
+
+  // Clear all terminal sessions from Supabase
+  const handleClearAllTerminalSessions = async (): Promise<boolean> => {
+    const ok = await clearAllTerminalSessions(supabaseConfig);
+    if (ok) {
+      setCloudTerminalSessions([]);
     }
     return ok;
   };
@@ -409,6 +520,7 @@ export default function App() {
     };
     setPowerAutomateConfig(updated);
     savePowerAutomateConfig(updated);
+    pushSharepointSettings(updated, supabaseConfig);
   };
 
   const handleSaveDeviceInfo = (newInfo: DeviceInfo) => {
@@ -535,8 +647,8 @@ export default function App() {
           />
         )}
 
-        {/* Historial Excel is rendered for Gerente and Master */}
-        {userRole !== 'OPERADOR_APK' && activeTab === 'history' && (
+        {/* Historial Excel is rendered for Gerente and Master (Web only, never in APK) */}
+        {userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone() && activeTab === 'history' && (
           <HistoryView
             scans={scans}
             powerAutomateConfig={powerAutomateConfig}
@@ -555,11 +667,14 @@ export default function App() {
             onSetAllUsersRound2={handleSetAllUsersRound2}
             onDeleteScanFromSupabase={handleDeleteScanFromSupabase}
             onDeleteAllScansFromSupabase={handleDeleteAllScansFromSupabase}
+            onRefreshCloudScans={handleRefreshCloudScans}
+            onDeleteTerminalSession={handleDeleteTerminalSession}
+            onClearAllTerminalSessions={handleClearAllTerminalSessions}
           />
         )}
 
         {/* Enlace SharePoint & Supabase is EXCLUSIVE to Master */}
-        {userRole === 'MASTER' && activeTab === 'powerautomate' && (
+        {userRole === 'MASTER' && !isRunningInApkOrStandalone() && activeTab === 'powerautomate' && (
           <PowerAutomateConfigView
             config={powerAutomateConfig}
             onSaveConfig={handleSavePowerAutomate}

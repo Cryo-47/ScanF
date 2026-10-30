@@ -140,6 +140,66 @@ export async function fetchTerminalSessions(
 }
 
 /**
+ * Delete a specific terminal session from Supabase (by deviceId or userNumber)
+ */
+export async function deleteTerminalSession(
+  deviceIdOrUser: string,
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const isUserNum = !isNaN(Number(deviceIdOrUser)) && Number(deviceIdOrUser) > 0;
+  const filter = isUserNum 
+    ? `user_number=eq.${Number(deviceIdOrUser)}`
+    : `device_id=eq.${encodeURIComponent(deviceIdOrUser)}`;
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?${filter}`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    return res.ok || res.status === 204 || res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clear all live terminal sessions from Supabase (resets live monitoring to 0)
+ */
+export async function clearAllTerminalSessions(
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?device_id=not.is.null`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    return res.ok || res.status === 204 || res.status === 200;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Push an inventory scan to Supabase cloud table
  */
 export async function pushScanToSupabase(
@@ -380,40 +440,56 @@ export async function syncScannedItem(
   let supabaseState: SyncResult['supabaseState'] = 'simulated';
   let errorMessage: string | undefined;
 
-  // Power Automate Sync (SharePoint Excel)
-  if (powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl) {
-    try {
-      const payload = buildPowerAutomatePayload(item);
-      const res = await fetch(powerAutomateConfig.webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      if (res.ok || res.status === 202 || res.status === 200 || res.status === 204) {
-        sharepointState = 'synced';
-      } else {
-        sharepointState = 'failed';
-        errorMessage = `Power Automate respondió HTTP ${res.status}: ${res.statusText}`;
+  const sharepointPromise = (async () => {
+    if (powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl) {
+      try {
+        const payload = buildPowerAutomatePayload(item);
+        const res = await fetch(powerAutomateConfig.webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        if (res.ok || res.status === 202 || res.status === 200 || res.status === 204) {
+          sharepointState = 'synced';
+        } else {
+          sharepointState = 'failed';
+          errorMessage = `Power Automate respondió HTTP ${res.status}: ${res.statusText}`;
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sharepointState = 'pending';
+        errorMessage = `Error de conexión: ${msg}`;
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      sharepointState = 'pending';
-      errorMessage = `Error de conexión: ${msg}`;
+    } else {
+      sharepointState = 'simulated';
     }
-  } else {
-    sharepointState = 'simulated';
-  }
+  })();
 
-  // Supabase Sync (Cloud Database)
-  if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
-    const success = await pushScanToSupabase(item, supabaseConfig);
-    supabaseState = success ? 'synced' : 'failed';
-  } else {
-    supabaseState = 'simulated';
+  const supabasePromise = (async () => {
+    if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      try {
+        const success = await pushScanToSupabase(item, supabaseConfig);
+        supabaseState = success ? 'synced' : 'failed';
+      } catch {
+        supabaseState = 'failed';
+      }
+    } else {
+      supabaseState = 'simulated';
+    }
+  })();
+
+  try {
+    await Promise.all([sharepointPromise, supabasePromise]);
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   return {
@@ -553,3 +629,85 @@ export async function testSupabaseConnection(
     };
   }
 }
+
+/**
+ * Push SharePoint / Power Automate webhook configuration to Supabase table
+ * so all handhelds and devices share the exact same working URL permanently.
+ */
+export async function pushSharepointSettings(
+  cfg: PowerAutomateConfig,
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'sharepoint_settings');
+  const payload = {
+    id: 'global_config',
+    webhook_url: cfg.webhookUrl,
+    excel_file_direct_url: cfg.excelFileDirectUrl || null,
+    sharepoint_site_url: cfg.sharepointSiteUrl || null,
+    table_name: cfg.tableName || 'TablaConteo1',
+    is_enabled: cfg.isEnabled !== undefined ? cfg.isEnabled : true,
+    updated_at: new Date().toISOString(),
+  };
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    return res.ok || res.status === 200 || res.status === 201 || res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch SharePoint / Power Automate settings from Supabase
+ */
+export async function fetchSharepointSettings(
+  supabaseConfig?: SupabaseConfig
+): Promise<Partial<PowerAutomateConfig> | null> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return null;
+  }
+
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'sharepoint_settings')}?select=*&id=eq.global_config&limit=1`;
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    const row = data[0];
+    if (!row || !row.webhook_url) return null;
+
+    return {
+      webhookUrl: String(row.webhook_url),
+      excelFileDirectUrl: row.excel_file_direct_url ? String(row.excel_file_direct_url) : undefined,
+      sharepointSiteUrl: row.sharepoint_site_url ? String(row.sharepoint_site_url) : undefined,
+      tableName: row.table_name ? String(row.table_name) : 'TablaConteo1',
+      isEnabled: row.is_enabled !== undefined ? Boolean(row.is_enabled) : true,
+    };
+  } catch {
+    return null;
+  }
+}
+

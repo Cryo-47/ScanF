@@ -18,7 +18,7 @@ import { UserRole, PowerAutomateConfig, SupabaseConfig } from '../types/inventor
 import { loadMasterPin, saveMasterPin } from '../utils/storage';
 import { testPowerAutomateWebhook, testSupabaseConnection } from '../utils/syncService';
 import { soundManager } from '../utils/audioHaptics';
-import { SUPABASE_SQL_SCRIPT } from '../utils/supabaseSql';
+import { SUPABASE_SQL_SCRIPT, SUPABASE_SHAREPOINT_SETTINGS_SQL } from '../utils/supabaseSql';
 
 interface MasterAuthModalProps {
   isOpen: boolean;
@@ -61,6 +61,7 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
   const [paTesting, setPaTesting] = useState(false);
   const [paTestResult, setPaTestResult] = useState<{ success: boolean; message: string; latencyMs: number } | null>(null);
   const [paSaved, setPaSaved] = useState(false);
+  const [copiedSharepointSql, setCopiedSharepointSql] = useState(false);
 
   // Supabase form state
   const [isSyncingAll, setIsSyncingAll] = useState(false);
@@ -391,8 +392,8 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
 
                   <div className="flex items-center gap-2">
                     {paSaved && (
-                      <span className="text-xs text-emerald-400 flex items-center gap-1">
-                        <Check className="w-3.5 h-3.5" /> Guardado
+                      <span className="text-xs text-emerald-400 flex items-center gap-1 font-semibold">
+                        <Check className="w-3.5 h-3.5" /> Guardado permanente en Supabase
                       </span>
                     )}
                     <button
@@ -402,6 +403,38 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
                       Guardar Configuración SharePoint
                     </button>
                   </div>
+                </div>
+
+                {/* Box indicating permanent Supabase storage */}
+                <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Code className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Tabla Supabase: <code className="text-blue-300 font-mono">public.sharepoint_settings</code></span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(SUPABASE_SHAREPOINT_SETTINGS_SQL);
+                        setCopiedSharepointSql(true);
+                        soundManager.playSuccess();
+                        setTimeout(() => setCopiedSharepointSql(false), 2000);
+                      }}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded-lg flex items-center gap-1 transition-all border border-slate-700"
+                    >
+                      {copiedSharepointSql ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" /> Copiado
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-slate-400" /> Copiar SQL Tabla SharePoint
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-normal">
+                    La URL de Power Automate y el enlace del archivo Excel se guardan automáticamente en Supabase para sincronizarse con todas las terminales TC26 sin tener que configurarlas manualmente.
+                  </p>
                 </div>
               </div>
             )}

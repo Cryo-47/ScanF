@@ -106,12 +106,45 @@ INSERT INTO public.inventory_round_control (id, global_round)
 VALUES ('global_control', '1ER_CONTEO')
 ON CONFLICT (id) DO NOTHING;
 
--- 5. Habilitar Seguridad a Nivel de Fila (RLS)
+-- 5. TABLA 4: Configuración Permanente de SharePoint / Power Automate
+CREATE TABLE IF NOT EXISTS public.sharepoint_settings (
+    id VARCHAR(50) PRIMARY KEY DEFAULT 'global_config',
+    webhook_url TEXT NOT NULL,
+    excel_file_direct_url TEXT,
+    sharepoint_site_url TEXT,
+    table_name VARCHAR(100) DEFAULT 'TablaConteo1',
+    is_enabled BOOLEAN DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS id VARCHAR(50);
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS webhook_url TEXT;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS excel_file_direct_url TEXT;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS sharepoint_site_url TEXT;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS table_name VARCHAR(100) DEFAULT 'TablaConteo1';
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT true;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+
+-- Insertar configuración oficial de SharePoint / Power Automate
+INSERT INTO public.sharepoint_settings (id, webhook_url, excel_file_direct_url, is_enabled)
+VALUES (
+    'global_config',
+    'https://defaultaa53848cce8346e7a4f67e95722c78.ff.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/03/workflows/2a1f4e5624d6473191e1243e7582b634/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=3v5hb8UU1C-4RCT_fp4x-xbkPTSt4C9F-Nn1WVhBLnc',
+    'https://cvdirectomexico-my.sharepoint.com/:x:/g/personal/darien_perez_cvdirecto_mx/IQDD8GrWE8ExQqd0q4UnAx_AAXxNHR0FCYvrChowOlYaUKw?e=lVg9oD',
+    true
+)
+ON CONFLICT (id) DO UPDATE SET
+    webhook_url = EXCLUDED.webhook_url,
+    excel_file_direct_url = COALESCE(EXCLUDED.excel_file_direct_url, public.sharepoint_settings.excel_file_direct_url),
+    updated_at = timezone('utc'::text, now());
+
+-- 6. Habilitar Seguridad a Nivel de Fila (RLS)
 ALTER TABLE public.terminal_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_scans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_round_control ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sharepoint_settings ENABLE ROW LEVEL SECURITY;
 
--- 6. Políticas de Acceso RLS Públicas (Lectura, Inserción y Actualización con anon key)
+-- 7. Políticas de Acceso RLS Públicas (Lectura, Inserción y Actualización con anon key)
 DROP POLICY IF EXISTS "Permitir acceso completo terminal_sessions" ON public.terminal_sessions;
 CREATE POLICY "Permitir acceso completo terminal_sessions"
 ON public.terminal_sessions
@@ -136,9 +169,68 @@ TO anon, authenticated
 USING (true)
 WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Permitir acceso completo sharepoint_settings" ON public.sharepoint_settings;
+CREATE POLICY "Permitir acceso completo sharepoint_settings"
+ON public.sharepoint_settings
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);
+
 -- =====================================================================
 -- FIN DEL SCRIPT SQL. EJECUTA EN EL SQL EDITOR DE SUPABASE
 -- =====================================================================
+`;
+
+/**
+ * Dedicated SQL script to create and configure sharepoint_settings table in Supabase
+ */
+export const SUPABASE_SHAREPOINT_SETTINGS_SQL = `-- =====================================================================
+-- TABLA DE CONFIGURACIÓN PERMANENTE SHAREPOINT / POWER AUTOMATE
+-- Copia y pega en el SQL Editor de tu proyecto Supabase:
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.sharepoint_settings (
+    id VARCHAR(50) PRIMARY KEY DEFAULT 'global_config',
+    webhook_url TEXT NOT NULL,
+    excel_file_direct_url TEXT,
+    sharepoint_site_url TEXT,
+    table_name VARCHAR(100) DEFAULT 'TablaConteo1',
+    is_enabled BOOLEAN DEFAULT true,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS id VARCHAR(50);
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS webhook_url TEXT;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS excel_file_direct_url TEXT;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS sharepoint_site_url TEXT;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS table_name VARCHAR(100) DEFAULT 'TablaConteo1';
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT true;
+ALTER TABLE public.sharepoint_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
+
+-- Guardar URL de Power Automate y enlace de SharePoint permanente
+INSERT INTO public.sharepoint_settings (id, webhook_url, excel_file_direct_url, is_enabled)
+VALUES (
+    'global_config',
+    'https://defaultaa53848cce8346e7a4f67e95722c78.ff.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/03/workflows/2a1f4e5624d6473191e1243e7582b634/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=3v5hb8UU1C-4RCT_fp4x-xbkPTSt4C9F-Nn1WVhBLnc',
+    'https://cvdirectomexico-my.sharepoint.com/:x:/g/personal/darien_perez_cvdirecto_mx/IQDD8GrWE8ExQqd0q4UnAx_AAXxNHR0FCYvrChowOlYaUKw?e=lVg9oD',
+    true
+)
+ON CONFLICT (id) DO UPDATE SET
+    webhook_url = EXCLUDED.webhook_url,
+    excel_file_direct_url = COALESCE(EXCLUDED.excel_file_direct_url, public.sharepoint_settings.excel_file_direct_url),
+    updated_at = timezone('utc'::text, now());
+
+-- Habilitar RLS y permisos para que las handhelds lean y sincronicen
+ALTER TABLE public.sharepoint_settings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Permitir acceso completo sharepoint_settings" ON public.sharepoint_settings;
+CREATE POLICY "Permitir acceso completo sharepoint_settings"
+ON public.sharepoint_settings
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);
 `;
 
 /**
@@ -169,4 +261,36 @@ FOR ALL
 TO anon, authenticated
 USING (true)
 WITH CHECK (true);
+
+-- Habilitar permisos de eliminación en terminal_sessions
+ALTER TABLE public.terminal_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Permitir eliminacion terminal_sessions" ON public.terminal_sessions;
+CREATE POLICY "Permitir eliminacion terminal_sessions"
+ON public.terminal_sessions
+FOR DELETE
+TO anon, authenticated
+USING (true);
+`;
+
+/**
+ * Script specifically for resetting all terminal live monitoring sessions in Supabase
+ */
+export const SUPABASE_RESET_TERMINALS_SQL = `-- =====================================================================
+-- REINICIAR MONITOREO EN VIVO DE TERMINALES TC26 (SUPABASE)
+-- Ejecuta esto en el SQL Editor para reiniciar a cero las sesiones de terminales:
+-- =====================================================================
+
+-- Habilitar permisos de eliminación
+ALTER TABLE public.terminal_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Permitir eliminacion terminal_sessions" ON public.terminal_sessions;
+CREATE POLICY "Permitir eliminacion terminal_sessions"
+ON public.terminal_sessions
+FOR DELETE
+TO anon, authenticated
+USING (true);
+
+-- Borrar todas las sesiones registradas
+DELETE FROM public.terminal_sessions WHERE device_id IS NOT NULL;
 `;
