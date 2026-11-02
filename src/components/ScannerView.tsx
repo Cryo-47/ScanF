@@ -710,7 +710,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 setIsConfirmUploadOpen(true);
               }
             }}
-            disabled={!hasDataInBoxes || isUploading}
+            disabled={!hasDataInBoxes}
             className={`w-full min-h-[56px] py-3.5 px-4 rounded-xl font-extrabold text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg transition-all active:scale-[0.98] leading-tight ${
               hasDataInBoxes
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/50 cursor-pointer'

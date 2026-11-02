@@ -369,8 +369,29 @@ export function computeDeviceSummaries(
   // 1. Incorporate authoritative cloud terminal sessions from Supabase
   if (cloudSessions && cloudSessions.length > 0) {
     for (const session of cloudSessions) {
-      const key = session.deviceId || (session.userNumber ? `Usuario ${session.userNumber}` : session.deviceName);
-      map.set(key, { ...session });
+      let resolvedUserNumber = session.userNumber;
+      if (!resolvedUserNumber && scans && scans.length > 0) {
+        const matchingScan = scans.find(
+          (s) =>
+            (s.dispositivo && s.dispositivo === session.deviceId) ||
+            (s.nombreOperadorCompleto && session.operatorName && s.nombreOperadorCompleto.toLowerCase() === session.operatorName.toLowerCase()) ||
+            (s.operador && session.operatorName && s.operador.toLowerCase() === session.operatorName.toLowerCase())
+        );
+        if (matchingScan?.userNumber) {
+          resolvedUserNumber = matchingScan.userNumber;
+        }
+      }
+      if (!resolvedUserNumber && session.operatorName) {
+        const match = session.operatorName.match(/usuario\s*(\d+)/i);
+        if (match) resolvedUserNumber = parseInt(match[1], 10);
+      }
+      if (!resolvedUserNumber && session.deviceId) {
+        const match = session.deviceId.match(/(?:tc26-)?u(\d+)/i);
+        if (match) resolvedUserNumber = parseInt(match[1], 10);
+      }
+
+      const key = session.deviceId || (resolvedUserNumber ? `Usuario ${resolvedUserNumber}` : session.deviceName);
+      map.set(key, { ...session, userNumber: resolvedUserNumber });
     }
   }
 

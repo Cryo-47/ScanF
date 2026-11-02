@@ -298,7 +298,7 @@ export async function fetchCloudScans(
     return [];
   }
 
-  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?select=*&order=fecha_hora.desc&limit=2000`;
+  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?select=*&order=fecha_hora.desc&limit=10000`;
 
   try {
     const res = await fetch(endpoint, {
@@ -498,7 +498,7 @@ export async function syncScannedItem(
   let errorMessage: string | undefined;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
   const sharepointPromise = (async () => {
     if (powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl) {
