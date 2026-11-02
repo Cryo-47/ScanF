@@ -64,6 +64,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   // Hidden buffer for Zebra TC26 laser keystroke wedge
   const [hardwareBuffer, setHardwareBuffer] = useState('');
   const hardwareInputRef = useRef<HTMLInputElement>(null);
+  const skuInputRef = useRef<HTMLInputElement>(null);
 
   // Confirmation Modals
   const [isConfirmUploadOpen, setIsConfirmUploadOpen] = useState(false);
@@ -80,14 +81,16 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Keep scanner focused on hidden hardware buffer unless a modal is open
+  // Keep scanner focused on SKU input (if ready for scan) or hidden hardware buffer unless a modal is open
   useEffect(() => {
     if (!isConfirmUploadOpen && !isConfirmRetryOpen && !duplicateWarning) {
-      if (hardwareInputRef.current) {
-        hardwareInputRef.current.focus();
+      if (!sku && skuInputRef.current) {
+        skuInputRef.current.focus({ preventScroll: true });
+      } else if (hardwareInputRef.current) {
+        hardwareInputRef.current.focus({ preventScroll: true });
       }
     }
-  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning]);
+  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, sku]);
 
   // Process scanned QR and populate the 5 text boxes
   const handleProcessBarcode = (qrString: string) => {
@@ -360,7 +363,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       document.activeElement.blur();
     }
     setTimeout(() => {
-      if (hardwareInputRef.current) {
+      if (!sku && skuInputRef.current) {
+        skuInputRef.current.focus({ preventScroll: true });
+      } else if (hardwareInputRef.current) {
         hardwareInputRef.current.value = '';
         hardwareInputRef.current.focus({ preventScroll: true });
       }
@@ -527,12 +532,20 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </span>
           </div>
 
-        {/* 1. SKU (Bloqueado contra edición y selección manual) */}
+        {/* 1. SKU (Seleccionable para escaneo inicial; se bloquea automáticamente al capturar el QR) */}
         <div>
           <div className="flex items-center justify-between mb-1">
             <label htmlFor="field-sku" className="block text-xs font-semibold text-slate-300 leading-normal flex items-center gap-1.5">
               <span>SKU / Código del Producto:</span>
-              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">🔒 Bloqueado</span>
+              {hasDataInBoxes ? (
+                <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                  🔒 Bloqueado
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse">
+                  🎯 Listo para Escaneo
+                </span>
+              )}
             </label>
             {sku.includes('_') && (
               <button
@@ -547,15 +560,42 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           </div>
           <input
             id="field-sku"
+            ref={skuInputRef}
             type="text"
-            readOnly
-            tabIndex={-1}
+            readOnly={hasDataInBoxes}
+            tabIndex={hasDataInBoxes ? -1 : 0}
+            inputMode="none"
             value={sku}
-            onFocus={(e) => e.target.blur()}
-            onTouchStart={(e) => e.preventDefault()}
-            onMouseDown={(e) => e.preventDefault()}
-            placeholder="Esperando escaneo con láser..."
-            className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-900/70 border border-slate-700/80 rounded-xl font-mono text-base sm:text-lg font-bold text-amber-400 placeholder:text-slate-600 focus:outline-none select-none cursor-default leading-normal pointer-events-none"
+            onChange={(e) => {
+              const val = e.target.value;
+              if (val.split('_').length >= 5) {
+                if (tryParseAndDistribute(val)) return;
+              }
+              setSku(val.toUpperCase());
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const targetVal = (e.target as HTMLInputElement).value;
+                if (targetVal.split('_').length >= 5) {
+                  tryParseAndDistribute(targetVal);
+                }
+              }
+            }}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text');
+              if (text && text.split('_').length >= 5) {
+                if (tryParseAndDistribute(text)) {
+                  e.preventDefault();
+                }
+              }
+            }}
+            placeholder={hasDataInBoxes ? 'Código cargado' : 'Toca aquí o apunta el láser de la TC26...'}
+            className={`w-full min-h-[48px] py-2.5 px-3.5 rounded-xl font-mono text-base sm:text-lg font-bold text-amber-400 placeholder:text-slate-500 focus:outline-none transition-all leading-normal ${
+              hasDataInBoxes
+                ? 'bg-slate-900/70 border border-slate-700/80 cursor-default select-none pointer-events-none'
+                : 'bg-slate-950 border-2 border-amber-500/70 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 cursor-text shadow-sm shadow-amber-500/10'
+            }`}
           />
         </div>
 
