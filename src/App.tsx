@@ -815,6 +815,9 @@ export default function App() {
         currentRound={activeDeviceRound}
         onSaveCheckIn={handleSaveCheckIn}
         onConfirmNewRoundName={handleConfirmNewRoundName}
+        cloudTerminalSessions={cloudTerminalSessions}
+        scans={scans}
+        supabaseConfig={supabaseConfig}
       />
     </div>
   );

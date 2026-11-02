@@ -92,6 +92,42 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     }
   }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, sku]);
 
+  const handleClearBoxes = () => {
+    setSku('');
+    setCantidad('');
+    setDescripcion('');
+    setSubinventario('');
+    setLocalizador('');
+    setRawQrScanned('');
+  };
+
+  // Canonical check to ensure no duplicate LOCALIZADOR is uploaded in the active count round
+  // Halts upload completely for both Supabase & Power Automate, clears boxes, and alerts the user
+  const checkDuplicateLocalizador = (targetLoc: string, currentSku?: string): boolean => {
+    const cleanLoc = (targetLoc || '').trim().toUpperCase();
+    if (!cleanLoc) return false;
+
+    const normalizedEffectiveRound = normalizeRound(effectiveRound);
+    const existingInRound = scans.filter(
+      (s) =>
+        s.localizador.trim().toUpperCase() === cleanLoc &&
+        normalizeRound(s.conteoRound) === normalizedEffectiveRound
+    );
+
+    if (existingInRound.length > 0) {
+      handleClearBoxes();
+      setIsConfirmUploadOpen(false);
+      soundManager.playWarning();
+      setDuplicateWarning({
+        sku: existingInRound[0].sku || currentSku || 'N/A',
+        localizador: cleanLoc,
+        prevTime: new Date(existingInRound[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+      return true;
+    }
+    return false;
+  };
+
   // Process scanned QR and populate the 5 text boxes
   const handleProcessBarcode = (qrString: string) => {
     const clean = qrString.trim();
@@ -111,39 +147,19 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       return;
     }
 
-    // Check for duplicate LOCALIZADOR in current count round (isolated per count round)
-    const normalizedEffectiveRound = normalizeRound(effectiveRound);
-    const existingInRound = scans.filter(
-      (s) =>
-        s.localizador.trim().toUpperCase() === parsed.localizador.trim().toUpperCase() &&
-        normalizeRound(s.conteoRound) === normalizedEffectiveRound
-    );
-
-    if (existingInRound.length > 0) {
-      // Clear fields immediately so duplicate QR data is erased and cannot be uploaded
-      setSku('');
-      setCantidad('');
-      setDescripcion('');
-      setSubinventario('');
-      setLocalizador('');
-      setRawQrScanned('');
-
-      soundManager.playWarning();
-      setDuplicateWarning({
-        sku: parsed.sku,
-        localizador: parsed.localizador,
-        prevTime: new Date(existingInRound[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      });
-    } else {
-      // Populate the 5 text boxes only for non-duplicated QRs
-      setSku(parsed.sku);
-      setCantidad(parsed.cantidad);
-      setDescripcion(parsed.descripcion);
-      setSubinventario(parsed.subinventario);
-      setLocalizador(parsed.localizador);
-      setRawQrScanned(clean);
-      soundManager.playSuccess();
+    // Check for duplicate LOCALIZADOR in current count round
+    if (checkDuplicateLocalizador(parsed.localizador, parsed.sku)) {
+      return;
     }
+
+    // Populate the 5 text boxes only for non-duplicated QRs
+    setSku(parsed.sku);
+    setCantidad(parsed.cantidad);
+    setDescripcion(parsed.descripcion);
+    setSubinventario(parsed.subinventario);
+    setLocalizador(parsed.localizador);
+    setRawQrScanned(clean);
+    soundManager.playSuccess();
 
     // Clear buffer
     setHardwareBuffer('');
@@ -271,21 +287,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     if (!sku || cantidad === '' || !localizador) return;
 
     // Double check that localizador was not already scanned in this round (canonical comparison)
-    const normalizedEffectiveRound = normalizeRound(effectiveRound);
-    const existingInRound = scans.filter(
-      (s) =>
-        s.localizador.trim().toUpperCase() === localizador.trim().toUpperCase() &&
-        normalizeRound(s.conteoRound) === normalizedEffectiveRound
-    );
-    if (existingInRound.length > 0) {
-      handleClearBoxes();
-      setIsConfirmUploadOpen(false);
-      soundManager.playWarning();
-      setDuplicateWarning({
-        sku: sku.trim(),
-        localizador: localizador.trim(),
-        prevTime: new Date(existingInRound[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      });
+    if (checkDuplicateLocalizador(localizador, sku)) {
       return;
     }
 
@@ -346,15 +348,6 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     handleClearBoxes();
     setIsConfirmRetryOpen(false);
     refocusScanner();
-  };
-
-  const handleClearBoxes = () => {
-    setSku('');
-    setCantidad('');
-    setDescripcion('');
-    setSubinventario('');
-    setLocalizador('');
-    setRawQrScanned('');
   };
 
   const refocusScanner = () => {
@@ -682,21 +675,40 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           </div>
 
           <div>
-            <label htmlFor="field-localizador" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal flex items-center gap-1.5">
+            <label htmlFor="field-localizador" className="block text-xs font-semibold text-slate-300 mb-1 leading-normal flex items-center justify-between">
               <span>Localizador (Rack / Bin):</span>
-              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">🔒 Bloqueado</span>
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-500/30">✏️ Editable</span>
             </label>
             <input
               id="field-localizador"
               type="text"
-              readOnly
-              tabIndex={-1}
               value={localizador}
-              onFocus={(e) => e.target.blur()}
-              onTouchStart={(e) => e.preventDefault()}
-              onMouseDown={(e) => e.preventDefault()}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val.includes('_') && val.split('_').length >= 5) {
+                  if (tryParseAndDistribute(val)) return;
+                }
+                setLocalizador(val.toUpperCase());
+              }}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                if (text && text.split('_').length >= 5) {
+                  if (tryParseAndDistribute(text)) {
+                    e.preventDefault();
+                  }
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  const targetVal = (e.target as HTMLInputElement).value;
+                  if (checkDuplicateLocalizador(targetVal, sku)) {
+                    return;
+                  }
+                }
+              }}
               placeholder="Ej. A-1-3"
-              className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-900/70 border border-slate-700/80 rounded-xl font-mono text-xs sm:text-sm font-bold text-emerald-400 placeholder:text-slate-600 focus:outline-none select-none cursor-default leading-normal pointer-events-none"
+              className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-xs sm:text-sm font-bold text-emerald-400 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
             />
           </div>
         </div>
@@ -707,6 +719,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <button
             onClick={() => {
               if (hasDataInBoxes) {
+                // Verify if manually entered or edited localizador is a duplicate before opening modal
+                if (checkDuplicateLocalizador(localizador, sku)) {
+                  return;
+                }
                 setIsConfirmUploadOpen(true);
               }
             }}
