@@ -11,6 +11,7 @@ const STORAGE_KEYS = {
   ROUND2_AUTH: 'tc26_round2_authorizations_v2',
   USER_ROUNDS: 'tc26_user_rounds_v3',
   IS_APK: 'tc26_is_apk_mode_v1',
+  LAST_RESET_TIME: 'tc26_last_applied_reset_time_v1',
 };
 
 export const DEFAULT_CONFIG: PowerAutomateConfig = {
@@ -115,6 +116,20 @@ export function saveScans(scans: ScannedItem[]): void {
     localStorage.setItem(STORAGE_KEYS.SCANS, JSON.stringify(scans));
   } catch {
     // Storage quota or disabled
+  }
+}
+
+export function loadLastAppliedResetTime(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(STORAGE_KEYS.LAST_RESET_TIME);
+}
+
+export function saveLastAppliedResetTime(timestamp: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.LAST_RESET_TIME, timestamp);
+  } catch {
+    // ignore
   }
 }
 

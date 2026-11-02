@@ -296,7 +296,7 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
             {activeMasterSection === 'sharepoint' && (
               <div className="space-y-4 animate-in fade-in duration-100">
                 <div className="p-3 bg-blue-950/20 border border-blue-500/30 rounded-xl text-xs text-blue-300">
-                  <strong>Conexión Power Automate ➔ SharePoint Excel:</strong> Permite que cada escaneo se divida automáticamente entre la Hoja 1 (Conteo 1) y Hoja 2 (Conteo 2) de tu archivo Excel.
+                  <strong>Conexión Power Automate ➔ SharePoint Excel:</strong> Permite que cada escaneo se divida automáticamente entre la Hoja 1 (Conteo 1), Hoja 2 (Conteo 2) y Hoja 3 (Conteo 3) de tu archivo Excel.
                 </div>
 
                 <div>

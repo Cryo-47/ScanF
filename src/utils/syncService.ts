@@ -13,7 +13,7 @@ export function buildPowerAutomatePayload(item: ScannedItem) {
   const roundMap: Record<string, string> = {
     '1ER_CONTEO': '1er Conteo',
     '2DO_CONTEO': '2do Conteo',
-    '3ER_CONTEO': '3er Conteo Extraordinario',
+    '3ER_CONTEO': '3er Conteo',
     'CONTEO_FINALIZADO': 'Finalizado',
   };
 
@@ -29,6 +29,7 @@ export function buildPowerAutomatePayload(item: ScannedItem) {
     subinventario: item.subinventario,
     localizador: item.localizador,
     ronda_conteo: roundMap[item.conteoRound] || item.conteoRound,
+    conteo_hoja: item.conteoRound === '3ER_CONTEO' ? 'Conteo 3' : (item.conteoRound === '2DO_CONTEO' ? 'Conteo 2' : 'Conteo 1'),
     operador: excelUserVal,
     dispositivo: item.dispositivo,
     codigo_qr_raw: item.rawQr,
@@ -133,6 +134,7 @@ export async function fetchTerminalSessions(
       lastActive: String(row.last_active || new Date().toISOString()),
       lastSku: row.last_sku ? String(row.last_sku) : undefined,
       lastLocator: row.last_locator ? String(row.last_locator) : undefined,
+      status: row.status ? String(row.status) : 'online',
     }));
   } catch {
     return [];
@@ -141,6 +143,7 @@ export async function fetchTerminalSessions(
 
 /**
  * Delete a specific terminal session from Supabase (by deviceId or userNumber)
+ * Broadcasts status='reset' with 0 counts before deleting so active handhelds immediately wipe local scans
  */
 export async function deleteTerminalSession(
   deviceIdOrUser: string,
@@ -158,6 +161,25 @@ export async function deleteTerminalSession(
   const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?${filter}`;
 
   try {
+    // 1. Mark as reset with 0s so handhelds immediately clear local scans even before deletion
+    await fetch(endpoint, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+      body: JSON.stringify({
+        status: 'reset',
+        total_scans: 0,
+        total_piezas: 0,
+        last_sku: null,
+        last_locator: null,
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => {});
+
+    // 2. Perform deletion
     const res = await fetch(endpoint, {
       method: 'DELETE',
       headers: {
@@ -174,6 +196,7 @@ export async function deleteTerminalSession(
 
 /**
  * Clear all live terminal sessions from Supabase (resets live monitoring to 0)
+ * Broadcasts status='reset' with 0 counts to all handhelds so they wipe local scans and restart at zero
  */
 export async function clearAllTerminalSessions(
   supabaseConfig?: SupabaseConfig
@@ -185,6 +208,25 @@ export async function clearAllTerminalSessions(
   const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?device_id=not.is.null`;
 
   try {
+    // 1. Mark all as reset with 0s so any connected handheld wipes local scans
+    await fetch(endpoint, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+      body: JSON.stringify({
+        status: 'reset',
+        total_scans: 0,
+        total_piezas: 0,
+        last_sku: null,
+        last_locator: null,
+        updated_at: new Date().toISOString(),
+      }),
+    }).catch(() => {});
+
+    // 2. Perform deletion
     const res = await fetch(endpoint, {
       method: 'DELETE',
       headers: {
@@ -349,26 +391,37 @@ export async function deleteAllScansFromSupabase(
 }
 
 /**
- * Push round authorizations (Gerente) to Supabase so handhelds reflect the changes automatically
+ * Push round authorizations and reset signals (Gerente) to Supabase so handhelds reflect the changes automatically
  */
 export async function pushRoundControl(
   globalRound: CountRound,
   userRounds: Record<number, CountRound>,
   authorizations: Record<number, boolean>,
-  supabaseConfig?: SupabaseConfig
+  supabaseConfig?: SupabaseConfig,
+  resets?: {
+    globalResetAt?: string;
+    userResets?: Record<string, string>;
+  }
 ): Promise<boolean> {
   if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
     return false;
   }
 
   const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_round_control');
-  const payload = {
+  const payload: Record<string, unknown> = {
     id: 'global_control',
     global_round: globalRound,
     user_rounds: userRounds,
     round2_authorizations: authorizations,
     updated_at: new Date().toISOString(),
   };
+
+  if (resets?.globalResetAt) {
+    payload.global_reset_at = resets.globalResetAt;
+  }
+  if (resets?.userResets) {
+    payload.user_resets = resets.userResets;
+  }
 
   try {
     const res = await fetch(endpoint, {
@@ -397,6 +450,8 @@ export async function fetchRoundControl(
   globalRound: CountRound;
   userRounds: Record<number, CountRound>;
   authorizations: Record<number, boolean>;
+  globalResetAt?: string;
+  userResets?: Record<string, string>;
 } | null> {
   if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
     return null;
@@ -422,6 +477,8 @@ export async function fetchRoundControl(
       globalRound: (row.global_round as CountRound) || '1ER_CONTEO',
       userRounds: (row.user_rounds as Record<number, CountRound>) || {},
       authorizations: (row.round2_authorizations as Record<number, boolean>) || {},
+      globalResetAt: row.global_reset_at ? String(row.global_reset_at) : undefined,
+      userResets: (row.user_resets as Record<string, string>) || undefined,
     };
   } catch {
     return null;

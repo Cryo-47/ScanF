@@ -59,6 +59,7 @@ export interface DeviceStatusSummary {
   lastActive: string;
   lastSku?: string;
   lastLocator?: string;
+  status?: string;
 }
 
 export interface PowerAutomateConfig {

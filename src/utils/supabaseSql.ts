@@ -99,6 +99,8 @@ ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS id VARCHAR(5
 ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS global_round VARCHAR(50) DEFAULT '1ER_CONTEO';
 ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS user_rounds JSONB;
 ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS round2_authorizations JSONB;
+ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS global_reset_at TIMESTAMPTZ;
+ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS user_resets JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now());
 
 -- Insertar fila inicial si no existe
@@ -277,20 +279,42 @@ USING (true);
  * Script specifically for resetting all terminal live monitoring sessions in Supabase
  */
 export const SUPABASE_RESET_TERMINALS_SQL = `-- =====================================================================
--- REINICIAR MONITOREO EN VIVO DE TERMINALES TC26 (SUPABASE)
--- Ejecuta esto en el SQL Editor para reiniciar a cero las sesiones de terminales:
+-- REINICIAR MONITOREO EN VIVO Y CAPTURAS DE HANDHELDS (SUPABASE)
+-- Ejecuta esto en el SQL Editor para reiniciar a cero las sesiones de terminales y capturas:
 -- =====================================================================
 
--- Habilitar permisos de eliminación
+-- 1. Asegurar columnas de control y estado
+ALTER TABLE public.terminal_sessions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'online';
+ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS global_reset_at TIMESTAMPTZ;
+ALTER TABLE public.inventory_round_control ADD COLUMN IF NOT EXISTS user_resets JSONB DEFAULT '{}'::jsonb;
+
+-- 2. Habilitar permisos de eliminación y actualización completa
 ALTER TABLE public.terminal_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.inventory_round_control ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Permitir eliminacion terminal_sessions" ON public.terminal_sessions;
-CREATE POLICY "Permitir eliminacion terminal_sessions"
+DROP POLICY IF EXISTS "Permitir acceso completo terminal_sessions" ON public.terminal_sessions;
+CREATE POLICY "Permitir acceso completo terminal_sessions"
 ON public.terminal_sessions
-FOR DELETE
+FOR ALL
 TO anon, authenticated
-USING (true);
+USING (true)
+WITH CHECK (true);
 
--- Borrar todas las sesiones registradas
+DROP POLICY IF EXISTS "Permitir acceso completo inventory_round_control" ON public.inventory_round_control;
+CREATE POLICY "Permitir acceso completo inventory_round_control"
+ON public.inventory_round_control
+FOR ALL
+TO anon, authenticated
+USING (true)
+WITH CHECK (true);
+
+-- 3. Borrar sesiones registradas
 DELETE FROM public.terminal_sessions WHERE device_id IS NOT NULL;
+
+-- 4. Registrar señal de reinicio global para que las handhelds limpien sus capturas
+UPDATE public.inventory_round_control 
+SET global_reset_at = timezone('utc'::text, now()),
+    updated_at = timezone('utc'::text, now())
+WHERE id = 'global_control';
 `;

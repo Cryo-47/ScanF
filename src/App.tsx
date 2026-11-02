@@ -25,7 +25,9 @@ import {
   loadUserRounds,
   saveUserRounds,
   computeDeviceSummaries, 
-  isRunningInApkOrStandalone 
+  isRunningInApkOrStandalone,
+  loadLastAppliedResetTime,
+  saveLastAppliedResetTime
 } from './utils/storage';
 import { 
   syncScannedItem,
@@ -145,56 +147,55 @@ export default function App() {
         return;
       }
 
-      // Fetch live terminal sessions
-      try {
-        const remoteSessions = await fetchTerminalSessions(supabaseConfig);
-        if (isMounted) {
-          setCloudTerminalSessions(remoteSessions);
-        }
-      } catch {
-        // ignore
-      }
+      let isResetTriggered = false;
 
-      // Fetch cloud scans, merge, and auto-save any local scans to Supabase
-      try {
-        const rawRemoteScans = await fetchCloudScans(supabaseConfig);
-        if (isMounted) {
-          const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
-          const remoteIds = new Set(remoteScans.map((s) => s.id));
-
-          setScans((prev) => {
-            // Auto-save local scans to Supabase if they are not stored in Supabase yet
-            const unpushed = prev.filter(
-              (s) => !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
-            );
-            if (unpushed.length > 0) {
-              for (const item of unpushed) {
-                pushScanToSupabase(item, supabaseConfig);
-              }
-            }
-
-            const map = new Map<string, ScannedItem>();
-            for (const s of remoteScans) map.set(s.id, s);
-            for (const s of prev) {
-              if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
-                map.set(s.id, s);
-              }
-            }
-            const merged = Array.from(map.values()).sort(
-              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
-            saveScans(merged);
-            return merged;
-          });
-        }
-      } catch {
-        // ignore
-      }
-
-      // Fetch round control
+      // 1. Fetch round control & check for global or user reset commands from Gerencia
       try {
         const control = await fetchRoundControl(supabaseConfig);
         if (isMounted && control) {
+          const lastApplied = loadLastAppliedResetTime();
+
+          // Check global reset command (e.g. Gerente clicked "Reiniciar monitoreo en vivo")
+          if (control.globalResetAt) {
+            const isNewer = !lastApplied || new Date(control.globalResetAt).getTime() > new Date(lastApplied).getTime();
+            if (isNewer) {
+              isResetTriggered = true;
+              saveLastAppliedResetTime(control.globalResetAt);
+              setScans([]);
+              saveScans([]);
+              deletedScanIdsRef.current.clear();
+              if (deviceInfo.userNumber) {
+                pushTerminalPresence(
+                  deviceInfo,
+                  activeDeviceRound,
+                  { totalScans: 0, totalPieces: 0 },
+                  supabaseConfig
+                ).catch(() => {});
+              }
+            }
+          }
+
+          // Check individual user reset command (e.g. Gerente clicked "Borrar" on this user's box)
+          if (!isResetTriggered && control.userResets && deviceInfo.userNumber && control.userResets[deviceInfo.userNumber]) {
+            const userResetTime = control.userResets[deviceInfo.userNumber];
+            const isNewer = !lastApplied || new Date(userResetTime).getTime() > new Date(lastApplied).getTime();
+            if (isNewer) {
+              isResetTriggered = true;
+              saveLastAppliedResetTime(userResetTime);
+              setScans([]);
+              saveScans([]);
+              deletedScanIdsRef.current.clear();
+              if (deviceInfo.userNumber) {
+                pushTerminalPresence(
+                  deviceInfo,
+                  activeDeviceRound,
+                  { totalScans: 0, totalPieces: 0 },
+                  supabaseConfig
+                ).catch(() => {});
+              }
+            }
+          }
+
           if (control.globalRound && control.globalRound !== countRound) {
             setCountRound(control.globalRound);
             saveCountRound(control.globalRound);
@@ -214,6 +215,77 @@ export default function App() {
         }
       } catch {
         // ignore
+      }
+
+      // 2. Fetch live terminal sessions
+      try {
+        const remoteSessions = await fetchTerminalSessions(supabaseConfig);
+        if (isMounted) {
+          setCloudTerminalSessions(remoteSessions);
+
+          // If current handheld is registered, check if its session was marked 'reset'
+          if (!isResetTriggered && deviceInfo.userNumber) {
+            const mySession = remoteSessions.find(
+              (s) => s.userNumber === deviceInfo.userNumber || s.deviceId === deviceInfo.deviceId
+            );
+            if (mySession && mySession.status === 'reset') {
+              isResetTriggered = true;
+              const nowIso = new Date().toISOString();
+              saveLastAppliedResetTime(nowIso);
+              setScans([]);
+              saveScans([]);
+              deletedScanIdsRef.current.clear();
+              pushTerminalPresence(
+                deviceInfo,
+                activeDeviceRound,
+                { totalScans: 0, totalPieces: 0 },
+                supabaseConfig
+              ).catch(() => {});
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Fetch cloud scans, merge, and auto-save only if not recently reset
+      if (!isResetTriggered) {
+        try {
+          const rawRemoteScans = await fetchCloudScans(supabaseConfig);
+          if (isMounted) {
+            const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
+            const remoteIds = new Set(remoteScans.map((s) => s.id));
+
+            setScans((prev) => {
+              // Only push unpushed scans if prev has items
+              if (prev.length > 0) {
+                const unpushed = prev.filter(
+                  (s) => !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
+                );
+                if (unpushed.length > 0) {
+                  for (const item of unpushed) {
+                    pushScanToSupabase(item, supabaseConfig);
+                  }
+                }
+              }
+
+              const map = new Map<string, ScannedItem>();
+              for (const s of remoteScans) map.set(s.id, s);
+              for (const s of prev) {
+                if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
+                  map.set(s.id, s);
+                }
+              }
+              const merged = Array.from(map.values()).sort(
+                (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+              );
+              saveScans(merged);
+              return merged;
+            });
+          }
+        } catch {
+          // ignore
+        }
       }
 
       // Fetch SharePoint / Power Automate settings from Supabase
@@ -492,8 +564,26 @@ export default function App() {
     return remoteScans.length;
   };
 
-  // Delete single terminal session from Supabase
+  // Delete single terminal session from Supabase and broadcast reset command to handheld
   const handleDeleteTerminalSession = async (deviceId: string): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+    const userNum = Number(deviceId);
+
+    // 1. If targeting a user number, record reset timestamp in inventory_round_control
+    if (!isNaN(userNum) && userNum > 0) {
+      await pushRoundControl(countRound, userRounds, round2Authorizations, supabaseConfig, {
+        userResets: { [userNum]: nowIso },
+      });
+    }
+
+    // 2. If current terminal happens to be this user/device, reset its local scans immediately
+    if (deviceInfo.userNumber === userNum || deviceInfo.deviceId === deviceId) {
+      saveLastAppliedResetTime(nowIso);
+      setScans([]);
+      saveScans([]);
+    }
+
+    // 3. Mark reset and delete in Supabase terminal_sessions
     const ok = await deleteTerminalSession(deviceId, supabaseConfig);
     if (ok) {
       setCloudTerminalSessions((prev) =>
@@ -503,12 +593,22 @@ export default function App() {
     return ok;
   };
 
-  // Clear all terminal sessions from Supabase
+  // Clear all terminal sessions from Supabase and broadcast global reset command to all handhelds
   const handleClearAllTerminalSessions = async (): Promise<boolean> => {
+    const nowIso = new Date().toISOString();
+
+    // 1. Record global reset timestamp in inventory_round_control so all handhelds clear local captures
+    saveLastAppliedResetTime(nowIso);
+    setScans([]);
+    saveScans([]);
+    setCloudTerminalSessions([]);
+
+    await pushRoundControl(countRound, userRounds, round2Authorizations, supabaseConfig, {
+      globalResetAt: nowIso,
+    });
+
+    // 2. Broadcast reset status and delete from terminal_sessions
     const ok = await clearAllTerminalSessions(supabaseConfig);
-    if (ok) {
-      setCloudTerminalSessions([]);
-    }
     return ok;
   };
 
