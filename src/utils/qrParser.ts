@@ -101,3 +101,18 @@ export const SAMPLE_QR_CODES = [
     qr: 'C0930-00_600_SET DE CUCHILLOS CERAMICA JADE PRECISION_LINEA_A-3-4',
   },
 ];
+
+/**
+ * Detects if a locator corresponds to Level/Fila 1 (Picking area where goods move constantly)
+ * Expected structure: Letra-Fila-Columna (e.g. A-1-3, B-1-12, L-1-54, A_1_3)
+ */
+export function isPickingFila1(locator: string): boolean {
+  if (!locator) return false;
+  const clean = locator.trim().toUpperCase();
+  const parts = clean.split(/[-_\s]+/);
+  // Must have Letra, Fila 1, and Columna (e.g. A-1-3, B-1-54)
+  if (parts.length >= 3) {
+    return (parts[1] === '1' || parts[1] === '01') && parts[2].length > 0;
+  }
+  return /^[A-Z][-_\s]+0?1[-_\s]+\d+/i.test(clean);
+}

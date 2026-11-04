@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CountRound, ScannedItem, PowerAutomateConfig, UserRole, DeviceInfo } from '../types/inventory';
-import { parseInventoryQr } from '../utils/qrParser';
+import { parseInventoryQr, isPickingFila1 } from '../utils/qrParser';
 import { soundManager } from '../utils/audioHaptics';
 import { normalizeRound } from '../utils/storage';
 
@@ -61,6 +61,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [localizador, setLocalizador] = useState('');
   const [rawQrScanned, setRawQrScanned] = useState('');
 
+  // Detect whether the current locator is in Fila 1 (Picking area where goods move constantly)
+  const isFila1Picking = isPickingFila1(localizador);
+
   // Hidden buffer for Zebra TC26 laser keystroke wedge
   const [hardwareBuffer, setHardwareBuffer] = useState('');
   const hardwareInputRef = useRef<HTMLInputElement>(null);
@@ -81,13 +84,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  // Keep scanner focused on SKU input (if ready for scan) or hidden hardware buffer unless a modal is open
+  // Keep scanner focused on SKU input when initially ready, but NEVER steal focus if user is typing
   useEffect(() => {
     if (!isConfirmUploadOpen && !isConfirmRetryOpen && !duplicateWarning) {
+      if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+        return;
+      }
       if (!sku && skuInputRef.current) {
         skuInputRef.current.focus({ preventScroll: true });
-      } else if (hardwareInputRef.current) {
-        hardwareInputRef.current.focus({ preventScroll: true });
       }
     }
   }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, sku]);
@@ -301,11 +305,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       id: 'SC-' + Date.now().toString(36).toUpperCase(),
       sku: sku.trim(),
       cantidad: Number(cantidad),
-      descripcion: descripcion.trim(),
-      subinventario: subinventario.trim(),
+      descripcion: descripcion.trim() || (isFila1Picking ? 'PICKING FILA 1' : ''),
+      subinventario: subinventario.trim() || 'LINEA',
       localizador: localizador.trim(),
       conteoRound: effectiveRound,
-      rawQr: rawQrScanned || `${sku}_${cantidad}_${descripcion}_${subinventario}_${localizador}`,
+      rawQr: rawQrScanned || `${sku}_${cantidad}_${descripcion || 'PICKING FILA 1'}_${subinventario || 'LINEA'}_${localizador}`,
       timestamp: new Date().toISOString(),
       operador: userExcelVal,
       nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
@@ -525,12 +529,37 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </span>
           </div>
 
-        {/* 1. SKU (Seleccionable para escaneo inicial; se bloquea automáticamente al capturar el QR) */}
+          {/* Helper banner when Fila 1 Picking is detected */}
+          {isFila1Picking && (
+            <div className="p-3 bg-amber-500/15 border-2 border-amber-500/40 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-300 animate-in fade-in">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">📦</span>
+                <div>
+                  <div className="font-bold text-white flex items-center gap-2">
+                    <span>Ubicación de Picking Detectada: Fila 1 ({localizador.trim()})</span>
+                  </div>
+                  <span className="text-[11px] text-amber-200/90 leading-tight block mt-0.5">
+                    En Fila 1 los productos se mueven constantemente. La casilla de <strong>SKU</strong> está desbloqueada para que ingreses el código manualmente.
+                  </span>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold bg-amber-500 text-slate-950 shrink-0 shadow-sm">
+                Fila 1 (Picking)
+              </span>
+            </div>
+          )}
+
+        {/* 1. SKU (Seleccionable para escaneo; se bloquea al capturar QR, pero se habilita automáticamente si es Fila 1 de picking) */}
         <div>
           <div className="flex items-center justify-between mb-1">
             <label htmlFor="field-sku" className="block text-xs font-semibold text-slate-300 leading-normal flex items-center gap-1.5">
               <span>SKU / Código del Producto:</span>
-              {hasDataInBoxes ? (
+              {isFila1Picking ? (
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-500/25 text-amber-300 border border-amber-500/50 flex items-center gap-1 animate-pulse">
+                  <span>📦</span>
+                  <span>Fila 1 (Picking): SKU Editable</span>
+                </span>
+              ) : hasDataInBoxes ? (
                 <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
                   🔒 Bloqueado
                 </span>
@@ -555,9 +584,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             id="field-sku"
             ref={skuInputRef}
             type="text"
-            readOnly={hasDataInBoxes}
-            tabIndex={hasDataInBoxes ? -1 : 0}
-            inputMode="none"
+            readOnly={hasDataInBoxes && !isFila1Picking}
+            tabIndex={hasDataInBoxes && !isFila1Picking ? -1 : 0}
+            inputMode={isFila1Picking ? "text" : "none"}
             value={sku}
             onChange={(e) => {
               const val = e.target.value;
@@ -583,11 +612,19 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 }
               }
             }}
-            placeholder={hasDataInBoxes ? 'Código cargado' : 'Toca aquí o apunta el láser de la TC26...'}
-            className={`w-full min-h-[48px] py-2.5 px-3.5 rounded-xl font-mono text-base sm:text-lg font-bold text-amber-400 placeholder:text-slate-500 focus:outline-none transition-all leading-normal ${
-              hasDataInBoxes
-                ? 'bg-slate-900/70 border border-slate-700/80 cursor-default select-none pointer-events-none'
-                : 'bg-slate-950 border-2 border-amber-500/70 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 cursor-text shadow-sm shadow-amber-500/10'
+            placeholder={
+              isFila1Picking
+                ? 'Escribe el SKU del producto de picking (ej. C0520-00)...'
+                : hasDataInBoxes
+                ? 'Código cargado'
+                : 'Toca aquí o apunta el láser de la TC26...'
+            }
+            className={`w-full min-h-[48px] py-2.5 px-3.5 rounded-xl font-mono text-base sm:text-lg font-bold placeholder:text-slate-500 focus:outline-none transition-all leading-normal ${
+              isFila1Picking
+                ? 'bg-slate-950 border-2 border-amber-400 text-amber-300 focus:ring-2 focus:ring-amber-500/20 cursor-text shadow-sm shadow-amber-500/10'
+                : hasDataInBoxes
+                ? 'bg-slate-900/70 border border-slate-700/80 cursor-default select-none pointer-events-none text-amber-400'
+                : 'bg-slate-950 border-2 border-amber-500/70 focus:border-amber-400 focus:ring-2 focus:ring-amber-500/20 cursor-text shadow-sm shadow-amber-500/10 text-amber-400'
             }`}
           />
         </div>
