@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Smartphone, 
   User, 
@@ -8,7 +8,10 @@ import {
   AlertTriangle,
   X,
   Check,
-  Loader2
+  Loader2,
+  Radio,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import { DeviceStatusSummary, CountRound, UserRole } from '../types/inventory';
 import { soundManager } from '../utils/audioHaptics';
@@ -29,6 +32,13 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
 }) => {
   const [filterRound, setFilterRound] = useState<CountRound | 'ALL'>('ALL');
   
+  // 10s tick so relative times and online/offline statuses update dynamically in real time
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick((t) => t + 1), 10000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Deletion modal state
   const [deleteTarget, setDeleteTarget] = useState<
     | { type: 'all' }
@@ -37,6 +47,16 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
   >(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
+
+  // Online / Inactive helper (< 60s is considered actively inside the app)
+  const isDeviceOnline = (d: DeviceStatusSummary) => {
+    if (!d.lastActive || d.status === 'offline') return false;
+    const diffMs = Date.now() - new Date(d.lastActive).getTime();
+    return diffMs >= 0 && diffMs < 60000;
+  };
+
+  const onlineCount = devices.filter(isDeviceOnline).length;
+  const offlineCount = devices.length - onlineCount;
 
   const filteredDevices = devices.filter((d) => {
     if (filterRound === 'ALL') return true;
@@ -146,7 +166,24 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
         </div>
 
         {/* Action Controls for Gerente / Master */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Online / Inactive count badges */}
+          <div className="flex items-center gap-1.5 text-xs font-mono mr-1">
+            <span className="px-2 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5 font-bold shadow-sm">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span>{onlineCount} En Línea</span>
+            </span>
+            {offlineCount > 0 && (
+              <span className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5 font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+                <span>{offlineCount} Inactivos</span>
+              </span>
+            )}
+          </div>
+
           {onClearAllTerminalSessions && (
             <button
               onClick={() => setDeleteTarget({ type: 'all' })}
@@ -232,10 +269,16 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {filteredDevices.map((dev) => {
             const badge = getRoundBadge(dev.currentRound);
+            const isOnline = isDeviceOnline(dev);
+
             return (
               <div
                 key={dev.deviceId || dev.deviceName}
-                className="bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl p-3.5 space-y-2.5 transition-all relative group"
+                className={`bg-slate-950 border rounded-xl p-3.5 space-y-2.5 transition-all relative group ${
+                  isOnline 
+                    ? 'border-emerald-500/40 shadow-sm shadow-emerald-500/10' 
+                    : 'border-slate-800 hover:border-slate-700 opacity-90'
+                }`}
               >
                 {/* Device Title & Current Round Badge */}
                 <div className="flex items-start justify-between gap-2">
@@ -260,7 +303,23 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                    {/* Online / Inactivo Indicator */}
+                    {isOnline ? (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5 shadow-sm shadow-emerald-500/10">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                        </span>
+                        <span>EN LÍNEA</span>
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-slate-900 border border-slate-800 text-slate-400 flex items-center gap-1.5">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+                        <span>INACTIVO</span>
+                      </span>
+                    )}
+
                     {/* High visibility round indicator */}
                     <span
                       className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border flex items-center gap-1 ${badge.badgeClass}`}
@@ -299,15 +358,24 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
                   </div>
                 </div>
 
-                {/* Last Active info */}
-                <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-0.5">
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    <span>{formatTimeAgo(dev.lastActive)}</span>
+                {/* Status & Last Active info */}
+                <div className="flex items-center justify-between text-[11px] font-mono pt-1 border-t border-slate-900">
+                  <span className="flex items-center gap-1.5">
+                    <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                    {isOnline ? (
+                      <span className="text-emerald-400 font-semibold text-[10px] flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span>En la app ahora ({formatTimeAgo(dev.lastActive)})</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 text-[10px]">
+                        {formatTimeAgo(dev.lastActive)} <span className="text-slate-600">(Apagada o cerrada)</span>
+                      </span>
+                    )}
                   </span>
                   {dev.lastLocator && (
-                    <span className="text-emerald-400 font-semibold truncate max-w-[120px]">
-                      Loc: {dev.lastLocator}
+                    <span className="text-slate-300 font-semibold truncate max-w-[120px] text-[10px] bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                      Loc: <span className="text-emerald-400">{dev.lastLocator}</span>
                     </span>
                   )}
                 </div>

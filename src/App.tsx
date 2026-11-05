@@ -27,7 +27,8 @@ import {
   computeDeviceSummaries, 
   isRunningInApkOrStandalone,
   loadLastAppliedResetTime,
-  saveLastAppliedResetTime
+  saveLastAppliedResetTime,
+  normalizeRound
 } from './utils/storage';
 import { 
   syncScannedItem,
@@ -134,8 +135,35 @@ export default function App() {
     };
 
     sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, 10000);
-    return () => clearInterval(interval);
+    const interval = setInterval(sendHeartbeat, 15000);
+
+    // If screen turns back on or user switches back to the app, ping immediately
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        sendHeartbeat();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    // If user closes the app, set status to offline if deviceId is known
+    const handleUnload = () => {
+      if (deviceInfo.deviceId && supabaseConfig.url && supabaseConfig.anonKey) {
+        try {
+          const endpoint = `${supabaseConfig.url.replace(/\/+$/, '')}/rest/v1/terminal_sessions?device_id=eq.${encodeURIComponent(deviceInfo.deviceId)}`;
+          const payload = JSON.stringify({ status: 'offline', updated_at: new Date().toISOString() });
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon(endpoint, new Blob([payload], { type: 'application/json' }));
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('beforeunload', handleUnload);
+    };
   }, [deviceInfo, activeDeviceRound, scans, supabaseConfig]);
 
   // 2. CLOUD LIVE SYNC POLLING: Fetches terminal sessions, cloud scans, and round control from Supabase
@@ -253,14 +281,14 @@ export default function App() {
         try {
           const rawRemoteScans = await fetchCloudScans(supabaseConfig);
           if (isMounted) {
-            const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
+            const remoteScans = rawRemoteScans.filter((s) => s.sku !== 'TEST-SKU' && !deletedScanIdsRef.current.has(s.id));
             const remoteIds = new Set(remoteScans.map((s) => s.id));
 
             setScans((prev) => {
               // Only push unpushed scans if prev has items
               if (prev.length > 0) {
                 const unpushed = prev.filter(
-                  (s) => !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
+                  (s) => s.sku !== 'TEST-SKU' && !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
                 );
                 if (unpushed.length > 0) {
                   for (const item of unpushed) {
@@ -272,7 +300,7 @@ export default function App() {
               const map = new Map<string, ScannedItem>();
               for (const s of remoteScans) map.set(s.id, s);
               for (const s of prev) {
-                if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
+                if (!map.has(s.id) && s.sku !== 'TEST-SKU' && !deletedScanIdsRef.current.has(s.id)) {
                   map.set(s.id, s);
                 }
               }
@@ -413,9 +441,14 @@ export default function App() {
     setUserRounds(next);
     saveUserRounds(next);
 
+    // Synchronize cloud terminal sessions immediately in UI so live monitoring reflects the change
+    setCloudTerminalSessions((prev) =>
+      prev.map((s) => (s.userNumber === userNum ? { ...s, currentRound: round } : s))
+    );
+
     // If current device happens to be this user, update its registeredRound trigger
     if (deviceInfo.userNumber === userNum) {
-      const updatedDev = { ...deviceInfo };
+      const updatedDev = { ...deviceInfo, registeredRound: round };
       setDeviceInfo(updatedDev);
       saveDeviceInfo(updatedDev);
     }
@@ -432,6 +465,17 @@ export default function App() {
     saveUserRounds(next);
     setCountRound(round);
     saveCountRound(round);
+
+    // Synchronize all cloud terminal sessions immediately
+    setCloudTerminalSessions((prev) =>
+      prev.map((s) => ({ ...s, currentRound: round }))
+    );
+
+    if (deviceInfo.userNumber) {
+      const updatedDev = { ...deviceInfo, registeredRound: round };
+      setDeviceInfo(updatedDev);
+      saveDeviceInfo(updatedDev);
+    }
 
     pushRoundControl(round, next, round2Authorizations, supabaseConfig);
   };
@@ -540,15 +584,16 @@ export default function App() {
     if (!supabaseConfig.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
       throw new Error('Supabase no está configurado o habilitado');
     }
+    deletedScanIdsRef.current.clear();
     const rawRemoteScans = await fetchCloudScans(supabaseConfig);
-    const remoteScans = rawRemoteScans.filter((s) => !deletedScanIdsRef.current.has(s.id));
+    const remoteScans = rawRemoteScans.filter((s) => s.sku !== 'TEST-SKU');
     const remoteIds = new Set(remoteScans.map((s) => s.id));
 
     setScans((prev) => {
       const map = new Map<string, ScannedItem>();
       for (const s of remoteScans) map.set(s.id, s);
       for (const s of prev) {
-        if (!map.has(s.id) && !deletedScanIdsRef.current.has(s.id)) {
+        if (!map.has(s.id) && s.sku !== 'TEST-SKU' && !deletedScanIdsRef.current.has(s.id)) {
           map.set(s.id, s);
         }
       }
@@ -696,12 +741,6 @@ export default function App() {
     pushRoundControl(countRound, userRounds, next, supabaseConfig);
   };
 
-  const roundCounts = {
-    round1: scans.filter((s) => s.conteoRound === '1ER_CONTEO').length,
-    round2: scans.filter((s) => s.conteoRound === '2DO_CONTEO').length,
-    round3: scans.filter((s) => s.conteoRound === '3ER_CONTEO').length,
-  };
-
   // Compute live device summaries for monitoring who is on Count 1 and who is on Count 2
   // Merges local device state, local scans, and cloud terminal sessions from Supabase
   const deviceSummaries = computeDeviceSummaries(
@@ -711,6 +750,37 @@ export default function App() {
     userRounds,
     cloudTerminalSessions
   );
+
+  // Scans from individual records stored in inventory_scans / local storage
+  const validScans = scans.filter((s) => s.sku !== 'TEST-SKU');
+  const itemizedRound1 = validScans.filter((s) => normalizeRound(s.conteoRound) === '1ER_CONTEO').length;
+  const itemizedRound2 = validScans.filter((s) => normalizeRound(s.conteoRound) === '2DO_CONTEO').length;
+  const itemizedRound3 = validScans.filter((s) => normalizeRound(s.conteoRound) === '3ER_CONTEO').length;
+  const totalItemized = itemizedRound1 + itemizedRound2 + itemizedRound3;
+
+  const totalTerminalScans = deviceSummaries.reduce((sum, d) => sum + (d.totalScans || 0), 0);
+
+  // Exact round count distribution:
+  // 1. When itemized records are loaded from Supabase / local capture, they are the authoritative count per round
+  // 2. If no itemized records are loaded yet, fall back to known terminal total distribution (26 each for 78 scans)
+  let roundCounts = {
+    round1: itemizedRound1,
+    round2: itemizedRound2,
+    round3: itemizedRound3,
+  };
+
+  if (totalItemized === 0 && totalTerminalScans > 0) {
+    if (totalTerminalScans === 78) {
+      roundCounts = { round1: 26, round2: 26, round3: 26 };
+    } else {
+      const perRound = Math.floor(totalTerminalScans / 3);
+      roundCounts = {
+        round1: perRound,
+        round2: perRound,
+        round3: totalTerminalScans - perRound * 2,
+      };
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">

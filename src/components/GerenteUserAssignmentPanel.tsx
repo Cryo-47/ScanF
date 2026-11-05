@@ -304,14 +304,26 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                     <div className="w-full py-1 text-center text-[10px] font-mono font-bold text-amber-300 bg-amber-950/60 rounded border border-amber-500/40">
                       EN 3ER CONTEO (DESEMPATE)
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleAdvanceIndividual(u.userNum)}
-                      className="w-full px-2 py-1 rounded text-[10px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center gap-1"
-                    >
-                      <RotateCcw className="w-2.5 h-2.5" />
-                      <span>Volver a 2do Conteo</span>
-                    </button>
+                    <div className="grid grid-cols-2 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleRevertIndividual(u.userNum)}
+                        className="px-1.5 py-1 rounded text-[10px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center gap-1 transition-colors"
+                        title="Regresar este usuario a 1er Conteo"
+                      >
+                        <RotateCcw className="w-2.5 h-2.5" />
+                        <span>Regresar R1</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAdvanceIndividual(u.userNum)}
+                        className="px-1.5 py-1 rounded text-[10px] font-semibold bg-blue-950/80 hover:bg-blue-900/80 text-blue-300 border border-blue-500/40 flex items-center justify-center gap-1 transition-colors"
+                        title="Regresar este usuario a 2do Conteo"
+                      >
+                        <RotateCcw className="w-2.5 h-2.5" />
+                        <span>Volver R2</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

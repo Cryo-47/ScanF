@@ -1,4 +1,5 @@
 import { ScannedItem, PowerAutomateConfig, SupabaseConfig, DeviceInfo, DeviceStatusSummary, CountRound } from '../types/inventory';
+import { isValidUUID, generateUUID, normalizeRound } from './storage';
 
 export interface SyncResult {
   sharepointState: 'synced' | 'pending' | 'failed' | 'simulated';
@@ -253,8 +254,11 @@ export async function pushScanToSupabase(
   }
 
   const endpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans');
+  const validId = isValidUUID(item.id) ? item.id : generateUUID();
+  item.id = validId;
+
   const payload = {
-    id: item.id,
+    id: validId,
     fecha_hora: item.timestamp,
     sku: item.sku,
     cantidad: item.cantidad,
@@ -314,13 +318,13 @@ export async function fetchCloudScans(
     if (!Array.isArray(data)) return [];
 
     return data.map((row: Record<string, unknown>) => ({
-      id: String(row.id || ''),
+      id: String(row.id || generateUUID()),
       sku: String(row.sku || ''),
       cantidad: Number(row.cantidad || 0),
       descripcion: String(row.descripcion || ''),
       subinventario: String(row.subinventario || ''),
       localizador: String(row.localizador || ''),
-      conteoRound: (row.ronda_conteo as CountRound) || '1ER_CONTEO',
+      conteoRound: normalizeRound(row.ronda_conteo as string),
       rawQr: String(row.codigo_qr_raw || ''),
       timestamp: String(row.fecha_hora || row.created_at || new Date().toISOString()),
       operador: String(row.operador || 'Usuario 1'),

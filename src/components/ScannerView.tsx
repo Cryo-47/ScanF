@@ -15,7 +15,7 @@ import confetti from 'canvas-confetti';
 import { CountRound, ScannedItem, PowerAutomateConfig, UserRole, DeviceInfo } from '../types/inventory';
 import { parseInventoryQr, isPickingFila1 } from '../utils/qrParser';
 import { soundManager } from '../utils/audioHaptics';
-import { normalizeRound } from '../utils/storage';
+import { normalizeRound, generateUUID } from '../utils/storage';
 
 interface ScannerViewProps {
   onScanComplete: (item: ScannedItem) => Promise<void>;
@@ -302,7 +302,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     const userExcelVal = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : (deviceInfo.operatorName || 'Usuario 1');
 
     const newItem: ScannedItem = {
-      id: 'SC-' + Date.now().toString(36).toUpperCase(),
+      id: generateUUID(),
       sku: sku.trim(),
       cantidad: Number(cantidad),
       descripcion: descripcion.trim() || (isFila1Picking ? 'PICKING FILA 1' : ''),

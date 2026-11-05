@@ -8,9 +8,10 @@ import {
   UserCheck, 
   ShieldAlert,
   Layers,
-  Sparkles
+  Sparkles,
+  Users
 } from 'lucide-react';
-import { CountRound } from '../types/inventory';
+import { CountRound, DeviceStatusSummary } from '../types/inventory';
 import { soundManager } from '../utils/audioHaptics';
 
 interface GerenteRoundControlProps {
@@ -22,6 +23,8 @@ interface GerenteRoundControlProps {
     round3: number;
   };
   totalScans: number;
+  userRounds?: Record<number, CountRound>;
+  deviceSummaries?: DeviceStatusSummary[];
 }
 
 export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
@@ -29,6 +32,8 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
   onAuthorizeRound,
   scansCountInRound,
   totalScans,
+  userRounds,
+  deviceSummaries,
 }) => {
   const [confirmModal, setConfirmModal] = useState<{
     targetRound: CountRound;
@@ -36,6 +41,7 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
     description: string;
     confirmButtonText: string;
     confirmButtonColor: string;
+    isFinalizeAudit?: boolean;
   } | null>(null);
 
   const getRoundBadge = () => {
@@ -77,12 +83,36 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
 
   const status = getRoundBadge();
 
+  // Categorize users across 1st, 2nd, and 3rd rounds according to userRounds authority
+  const usersInRound1: Array<{ userNum: number; name?: string }> = [];
+  const usersInRound2: Array<{ userNum: number; name?: string }> = [];
+  const usersInRound3: Array<{ userNum: number; name?: string }> = [];
+
+  for (let i = 1; i <= 10; i++) {
+    const round = userRounds?.[i] || currentRound || '1ER_CONTEO';
+    const dev = deviceSummaries?.find((d) => d.userNumber === i);
+    const name = dev?.operatorName || undefined;
+
+    if (round === '2DO_CONTEO') {
+      usersInRound2.push({ userNum: i, name });
+    } else if (round === '3ER_CONTEO') {
+      usersInRound3.push({ userNum: i, name });
+    } else if (round === '1ER_CONTEO') {
+      if (dev || (userRounds && userRounds[i])) {
+        usersInRound1.push({ userNum: i, name });
+      }
+    }
+  }
+
+  const hasUsersInAdvancedRounds = usersInRound2.length > 0 || usersInRound3.length > 0;
+
   const handleOpenConfirm = (
     targetRound: CountRound,
     title: string,
     description: string,
     confirmButtonText: string,
-    confirmButtonColor: string
+    confirmButtonColor: string,
+    isFinalizeAudit?: boolean
   ) => {
     setConfirmModal({
       targetRound,
@@ -90,6 +120,7 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
       description,
       confirmButtonText,
       confirmButtonColor,
+      isFinalizeAudit,
     });
   };
 
@@ -191,7 +222,9 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
                   'bg-blue-600 hover:bg-blue-500 text-white'
                 )
               }
-              className="p-3 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-between col-span-1 sm:col-span-2"
+              className={`p-3 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-between ${
+                hasUsersInAdvancedRounds ? 'col-span-1' : 'col-span-1 sm:col-span-2'
+              }`}
             >
               <div className="text-left">
                 <div>Autorizar y Pasar al 2do Conteo</div>
@@ -200,6 +233,36 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
                 </div>
               </div>
               <ArrowRight className="w-5 h-5 shrink-0" />
+            </button>
+          )}
+
+          {/* Action: Finalizar button visible if at least 1 user reached 2nd or 3rd count */}
+          {currentRound !== 'CONTEO_FINALIZADO' && hasUsersInAdvancedRounds && currentRound === '1ER_CONTEO' && (
+            <button
+              onClick={() =>
+                handleOpenConfirm(
+                  'CONTEO_FINALIZADO',
+                  '¿Finalizar Conteo Definitivamente?',
+                  'Concluye formalmente la auditoría física. Las terminales TC26 detendrán el registro de escaneos.',
+                  'Sí, Finalizar Definitivamente',
+                  'bg-emerald-600 hover:bg-emerald-500 text-white',
+                  true
+                )
+              }
+              className="p-3 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-between col-span-1"
+            >
+              <div className="text-left">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <div>Finalizar Conteo Definitivamente</div>
+                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-200 font-mono text-[10px] border border-emerald-400/40">
+                    {usersInRound2.length + usersInRound3.length} usuarios en 2do/3er
+                  </span>
+                </div>
+                <div className="text-[11px] text-emerald-100 font-normal">
+                  Cerrar auditoría con desglose de usuarios
+                </div>
+              </div>
+              <CheckCircle2 className="w-5 h-5 shrink-0" />
             </button>
           )}
 
@@ -234,7 +297,8 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
                     '¿Finalizar Conteo Definitivamente?',
                     'El inventario quedará cerrado oficialmente tras el 2do conteo. Se bloqueará el escaneo en las terminales TC26.',
                     'Sí, Finalizar Definitivamente',
-                    'bg-emerald-600 hover:bg-emerald-500 text-white'
+                    'bg-emerald-600 hover:bg-emerald-500 text-white',
+                    true
                   )
                 }
                 className="p-3 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-between"
@@ -259,7 +323,8 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
                   '¿Finalizar Conteo Definitivamente?',
                   'Concluye formalmente la auditoría tras completar el 3er conteo de desempate. Las terminales TC26 detendrán el registro.',
                   'Sí, Finalizar y Cerrar Auditoría',
-                  'bg-emerald-600 hover:bg-emerald-500 text-white'
+                  'bg-emerald-600 hover:bg-emerald-500 text-white',
+                  true
                 )
               }
               className="p-3 bg-emerald-600 hover:bg-emerald-500 active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-between col-span-1 sm:col-span-2"
@@ -323,7 +388,7 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
       {/* Confirmation Modal */}
       {confirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-slate-900 border-2 border-indigo-500 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-center">
+          <div className="bg-slate-900 border-2 border-indigo-500 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4 text-center">
             <div className="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-400 shrink-0">
               <ShieldAlert className="w-7 h-7" />
             </div>
@@ -335,9 +400,86 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
               <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                 {confirmModal.title}
               </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                {confirmModal.description}
-              </p>
+
+              {confirmModal.isFinalizeAudit ? (
+                <div className="space-y-3 text-left pt-2">
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Resumen de usuarios por ronda:</span>
+                    </div>
+
+                    {/* 3er Conteo */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs font-bold text-amber-400">
+                        <span>3er Conteo Extraordinario:</span>
+                        <span className="font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30">
+                          {usersInRound3.length} {usersInRound3.length === 1 ? 'usuario' : 'usuarios'}
+                        </span>
+                      </div>
+                      {usersInRound3.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {usersInRound3.map((u) => (
+                            <span
+                              key={u.userNum}
+                              className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 font-mono text-[11px] border border-amber-500/40 font-semibold"
+                            >
+                              Usuario {u.userNum}{u.name ? ` (${u.name})` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-500 italic pl-1">Ningún usuario en 3er conteo</div>
+                      )}
+                    </div>
+
+                    {/* 2do Conteo */}
+                    <div className="space-y-1 pt-1.5 border-t border-slate-900">
+                      <div className="flex items-center justify-between text-xs font-bold text-blue-400">
+                        <span>2do Conteo:</span>
+                        <span className="font-mono bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/30">
+                          {usersInRound2.length} {usersInRound2.length === 1 ? 'usuario' : 'usuarios'}
+                        </span>
+                      </div>
+                      {usersInRound2.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {usersInRound2.map((u) => (
+                            <span
+                              key={u.userNum}
+                              className="px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 font-mono text-[11px] border border-blue-500/40 font-semibold"
+                            >
+                              Usuario {u.userNum}{u.name ? ` (${u.name})` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-500 italic pl-1">Ningún usuario en 2do conteo</div>
+                      )}
+                    </div>
+
+                    {/* 1er Conteo remaining notice */}
+                    {usersInRound1.length > 0 && (
+                      <div className="pt-1.5 border-t border-slate-900 text-[11px] text-slate-400 flex items-center justify-between">
+                        <span>Aún en 1er Conteo:</span>
+                        <span className="font-mono text-slate-300 font-semibold">
+                          {usersInRound1.length} {usersInRound1.length === 1 ? 'usuario' : 'usuarios'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <span>
+                      ¿Estás seguro de finalizar definitivamente con esta cantidad de usuarios en 2do y 3er conteo? Esta acción cerrará la auditoría y bloqueará el escaneo en todas las terminales TC26.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {confirmModal.description}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3 pt-2">

@@ -144,6 +144,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     if (onUpdateExcelLink && editedLink.trim()) {
       onUpdateExcelLink(editedLink.trim());
       setIsEditingLink(false);
+      soundManager.playSuccess();
+      setDeleteFeedbackToast('Link de SharePoint actualizado y sincronizado en Supabase.');
+      setTimeout(() => setDeleteFeedbackToast(null), 3500);
     }
   };
 
@@ -220,6 +223,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         onAuthorizeRound={onAuthorizeRound}
         scansCountInRound={scansCountInRound}
         totalScans={scans.length}
+        userRounds={userRounds}
+        deviceSummaries={deviceSummaries}
       />
 
       {/* EXCLUSIVO GERENTE: Asignación y Avance Individual al 2do Conteo */}
@@ -271,14 +276,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               <ExternalLink className="w-3.5 h-3.5 shrink-0" />
             </a>
 
-            {userRole === 'MASTER' && !isEditingLink && (
+            {(userRole === 'MASTER' || userRole === 'GERENTE') && !isEditingLink && (
               <button
                 onClick={() => {
                   setEditedLink(excelUrl);
                   setIsEditingLink(true);
                 }}
-                className="p-1.5 text-slate-400 hover:text-amber-400 rounded-lg hover:bg-slate-800 text-xs"
-                title="Editar URL directa de Excel (Solo Master)"
+                className="p-1.5 text-slate-400 hover:text-emerald-400 rounded-lg hover:bg-slate-800 text-xs transition-colors"
+                title="Editar link del archivo de Excel en SharePoint (Gerente y Master)"
               >
                 <Edit3 className="w-3.5 h-3.5" />
               </button>
@@ -294,10 +299,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 {excelUrl}
               </span>
             </div>
-            {userRole !== 'MASTER' && (
+            {userRole !== 'MASTER' && userRole !== 'GERENTE' && (
               <p className="text-[10px] text-slate-500 flex items-center gap-1 font-mono">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-600"></span>
-                Configuración de SharePoint y Supabase restringida exclusivamente al Usuario Master.
+                Configuración restringida a Gerencia y Master.
               </p>
             )}
           </div>
@@ -421,6 +426,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
               <tr>
                 <th className="py-3 px-4">Hora</th>
+                <th className="py-3 px-4">Usuario</th>
                 <th className="py-3 px-4">Ronda</th>
                 <th className="py-3 px-4">SKU & Descripción</th>
                 <th className="py-3 px-4 text-right">Cantidad</th>
@@ -436,7 +442,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <tbody className="divide-y divide-slate-800/80">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={userRole === 'MASTER' ? 7 : 6} className="py-8 text-center text-slate-500 text-xs">
+                  <td colSpan={userRole === 'MASTER' ? 8 : 7} className="py-8 text-center text-slate-500 text-xs">
                     {scans.length === 0
                       ? 'No hay registros subidos todavía. Escanea un código QR con la TC26 y presiona "Subir Información a Excel".'
                       : 'No se encontraron registros con esa búsqueda.'}
@@ -447,6 +453,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   <tr key={item.id} className="hover:bg-slate-800/40 transition-colors">
                     <td className="py-3 px-4 font-mono text-slate-400 text-[11px] whitespace-nowrap">
                       {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-[11px] font-bold">
+                        {item.userNumber ? `Usuario ${item.userNumber}` : (item.operador || 'Usuario 1')}
+                      </span>
                     </td>
                     <td className="py-3 px-4">
                       <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-950 text-slate-300 border border-slate-800">

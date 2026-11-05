@@ -100,11 +100,47 @@ export function setExplicitApkMode(isApk: boolean): void {
   }
 }
 
+const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Generate a standard RFC4122 v4 UUID compatible with Supabase UUID primary key columns
+ */
+export function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export function isValidUUID(str: string | undefined | null): boolean {
+  if (!str) return false;
+  return UUID_V4_REGEX.test(str.trim());
+}
+
 export function loadScans(): ScannedItem[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.SCANS);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const items: ScannedItem[] = JSON.parse(raw);
+    let upgraded = false;
+    const validated = items.map((it) => {
+      if (!isValidUUID(it.id)) {
+        upgraded = true;
+        return { ...it, id: generateUUID() };
+      }
+      return it;
+    });
+    if (upgraded) {
+      try {
+        localStorage.setItem(STORAGE_KEYS.SCANS, JSON.stringify(validated));
+      } catch {}
+    }
+    return validated;
   } catch {
     return [];
   }
@@ -390,8 +426,13 @@ export function computeDeviceSummaries(
         if (match) resolvedUserNumber = parseInt(match[1], 10);
       }
 
+      // USER ROUNDS OVERRIDE: Gerente individual round assignment in userRounds takes absolute priority!
+      const effectiveRound = (resolvedUserNumber && userRounds?.[resolvedUserNumber])
+        ? userRounds[resolvedUserNumber]
+        : (session.currentRound || currentRound);
+
       const key = session.deviceId || (resolvedUserNumber ? `Usuario ${resolvedUserNumber}` : session.deviceName);
-      map.set(key, { ...session, userNumber: resolvedUserNumber });
+      map.set(key, { ...session, userNumber: resolvedUserNumber, currentRound: effectiveRound });
     }
   }
 
