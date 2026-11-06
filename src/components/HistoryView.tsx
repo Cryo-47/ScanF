@@ -50,6 +50,8 @@ interface HistoryViewProps {
   onRefreshCloudScans?: () => Promise<number>;
   onDeleteTerminalSession?: (deviceId: string) => Promise<boolean>;
   onClearAllTerminalSessions?: () => Promise<boolean>;
+  onResetAllDevices?: () => Promise<void>;
+  onResetUserDevice?: (userNumber: number) => Promise<void>;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -73,6 +75,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   onRefreshCloudScans,
   onDeleteTerminalSession,
   onClearAllTerminalSessions,
+  onResetAllDevices,
+  onResetUserDevice,
 }) => {
   const [search, setSearch] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
@@ -80,12 +84,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const [editedLink, setEditedLink] = useState(powerAutomateConfig.excelFileDirectUrl || '');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Delete from Supabase modal states (Exclusive to MASTER)
+  // Delete from Supabase modal states (Exclusive to MASTER & GERENTE)
   const [confirmDeleteModal, setConfirmDeleteModal] = useState<
     | { type: 'all' }
     | { type: 'single'; item: ScannedItem }
     | null
   >(null);
+  const [rebootDevicesOnDelete, setRebootDevicesOnDelete] = useState(true);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteErrorMessage, setDeleteErrorMessage] = useState<string | null>(null);
   const [copiedDeleteSql, setCopiedDeleteSql] = useState(false);
@@ -166,6 +171,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         if (!onDeleteAllScansFromSupabase) {
           throw new Error('Función de eliminación de Supabase no configurada.');
         }
+        if (rebootDevicesOnDelete && onResetAllDevices) {
+          await onResetAllDevices();
+        }
         const ok = await onDeleteAllScansFromSupabase();
         if (!ok) {
           throw new Error(
@@ -173,7 +181,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           );
         }
         soundManager.playSuccess();
-        setDeleteFeedbackToast(`✓ Se han eliminado todos los registros de Supabase exitosamente.`);
+        setDeleteFeedbackToast(
+          rebootDevicesOnDelete
+            ? '✓ Escaneos borrados y orden de reinicio enviada a todas las terminales TC26 (1er Conteo).'
+            : '✓ Se han eliminado todos los registros de Supabase exitosamente.'
+        );
         setConfirmDeleteModal(null);
         setTimeout(() => setDeleteFeedbackToast(null), 4000);
       } else {
@@ -225,6 +237,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         totalScans={scans.length}
         userRounds={userRounds}
         deviceSummaries={deviceSummaries}
+        onOpenDeleteAllScans={() => setConfirmDeleteModal({ type: 'all' })}
       />
 
       {/* EXCLUSIVO GERENTE: Asignación y Avance Individual al 2do Conteo */}
@@ -238,6 +251,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         onSetAllUsers={onSetAllUsersRound2}
         scans={scans}
         deviceSummaries={deviceSummaries}
+        onResetAllDevices={onResetAllDevices}
+        onResetUserDevice={onResetUserDevice}
       />
 
       {/* REQUIRED ESPACIO: Link del archivo de Excel en SharePoint */}
@@ -337,6 +352,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         userRole={userRole}
         onDeleteTerminalSession={onDeleteTerminalSession}
         onClearAllTerminalSessions={onClearAllTerminalSessions}
+        onResetAllDevices={onResetAllDevices}
+        onResetSingleDevice={async (userNumber) => {
+          if (userNumber && onResetUserDevice) {
+            await onResetUserDevice(userNumber);
+          }
+        }}
       />
 
       {/* KPI Summary Banner */}
@@ -375,17 +396,28 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <span className="sm:hidden">Descargar Excel (.CSV)</span>
           </button>
 
-          {/* BOTÓN EXCLUSIVO MASTER: Eliminar registros de Supabase con ventana de confirmación */}
-          {userRole === 'MASTER' && (
+          {/* BOTÓN: Reiniciar todas las terminales TC26 (pedir nombre y usuario en 1er conteo) */}
+          {(userRole === 'GERENTE' || userRole === 'MASTER') && onResetAllDevices && (
+            <button
+              onClick={onResetAllDevices}
+              className="px-3.5 py-2 bg-amber-950/80 hover:bg-amber-900 text-amber-200 hover:text-white border border-amber-500/60 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 whitespace-nowrap cursor-pointer"
+              title="Forzar a todas las handhelds TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>Reiniciar Dispositivos</span>
+            </button>
+          )}
+
+          {/* BOTÓN: Eliminar datos de los QR escaneados en Supabase */}
+          {(userRole === 'GERENTE' || userRole === 'MASTER') && (
             <button
               onClick={() => setConfirmDeleteModal({ type: 'all' })}
-              disabled={scans.length === 0}
-              className="px-3.5 py-2 bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 border border-rose-500/40 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-40 active:scale-95 whitespace-nowrap"
-              title="Eliminar permanentemente todos los escaneos de Supabase (Acceso Master)"
+              className="px-3.5 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-200 hover:text-white border border-rose-500/60 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 whitespace-nowrap cursor-pointer"
+              title="Borrar permanentemente todos los datos de los códigos QR escaneados que se guardan en Supabase"
             >
               <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
               <Database className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-              <span>Borrar de Supabase (Master)</span>
+              <span>Borrar QR de Supabase</span>
             </button>
           )}
         </div>
@@ -432,9 +464,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <th className="py-3 px-4 text-right">Cantidad</th>
                 <th className="py-3 px-4">Subinv. / Localizador</th>
                 <th className="py-3 px-4 text-center">Estado Excel</th>
-                {userRole === 'MASTER' && (
+                {(userRole === 'GERENTE' || userRole === 'MASTER') && (
                   <th className="py-3 px-3 text-center text-rose-400 whitespace-nowrap">
-                    Eliminar (Master)
+                    Eliminar (Supabase)
                   </th>
                 )}
               </tr>
@@ -442,7 +474,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <tbody className="divide-y divide-slate-800/80">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={userRole === 'MASTER' ? 8 : 7} className="py-8 text-center text-slate-500 text-xs">
+                  <td colSpan={(userRole === 'GERENTE' || userRole === 'MASTER') ? 8 : 7} className="py-8 text-center text-slate-500 text-xs">
                     {scans.length === 0
                       ? 'No hay registros subidos todavía. Escanea un código QR con la TC26 y presiona "Subir Información a Excel".'
                       : 'No se encontraron registros con esa búsqueda.'}
@@ -488,12 +520,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                         </span>
                       )}
                     </td>
-                    {/* BOTÓN INDIVIDUAL DE ELIMINACIÓN DE SUPABASE (SOLO MASTER) */}
-                    {userRole === 'MASTER' && (
+                    {/* BOTÓN INDIVIDUAL DE ELIMINACIÓN DE SUPABASE */}
+                    {(userRole === 'GERENTE' || userRole === 'MASTER') && (
                       <td className="py-3 px-3 text-center whitespace-nowrap">
                         <button
                           onClick={() => setConfirmDeleteModal({ type: 'single', item })}
-                          title="Eliminar este escaneo de Supabase (Acceso Master)"
+                          title="Eliminar este escaneo de Supabase"
                           className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/15 rounded-lg transition-colors active:scale-90"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -532,7 +564,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               </div>
               <div className="space-y-1">
                 <div className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[10px] font-bold uppercase inline-block">
-                  Acceso Exclusivo Usuario Master
+                  Acceso Autorizado Gerente / Master
                 </div>
                 <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                   ¿Estás seguro de que deseas eliminar de Supabase?
@@ -560,6 +592,24 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
                     Destino: Tabla <code className="text-emerald-400 font-mono">inventory_scans</code> en Supabase Cloud.
                   </p>
+
+                  {/* Opción de reinicio de dispositivos para fase de pruebas */}
+                  <label className="flex items-start gap-2.5 p-2.5 bg-amber-950/40 border border-amber-500/40 rounded-xl cursor-pointer text-left mt-2">
+                    <input
+                      type="checkbox"
+                      checked={rebootDevicesOnDelete}
+                      onChange={(e) => setRebootDevicesOnDelete(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-400 focus:ring-offset-slate-950"
+                    />
+                    <div className="space-y-0.5 text-[11px]">
+                      <span className="font-bold text-amber-300 block">
+                        🔄 Reiniciar todas las terminales TC26 (Recomendado para pruebas)
+                      </span>
+                      <span className="text-slate-300 block leading-tight">
+                        Fuerza a las handhelds a cerrar sesión, regresar al 1er Conteo y volver a la pantalla de inicio para pedir nombre y usuario.
+                      </span>
+                    </div>
+                  </label>
                 </div>
               ) : (
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-slate-300">

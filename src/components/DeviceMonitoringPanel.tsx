@@ -18,10 +18,12 @@ import { soundManager } from '../utils/audioHaptics';
 
 interface DeviceMonitoringPanelProps {
   devices: DeviceStatusSummary[];
-  onSelectRoundFilter?: (round: CountRound | 'ALL') => void;
   userRole?: UserRole;
+  onSelectRoundFilter?: (round: CountRound | 'ALL') => void;
   onDeleteTerminalSession?: (deviceId: string) => Promise<boolean>;
   onClearAllTerminalSessions?: () => Promise<boolean>;
+  onResetAllDevices?: () => Promise<void>;
+  onResetSingleDevice?: (userNumber?: number, deviceId?: string) => Promise<void>;
 }
 
 export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
@@ -29,6 +31,8 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
   userRole,
   onDeleteTerminalSession,
   onClearAllTerminalSessions,
+  onResetAllDevices,
+  onResetSingleDevice,
 }) => {
   const [filterRound, setFilterRound] = useState<CountRound | 'ALL'>('ALL');
   
@@ -46,6 +50,15 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
     | null
   >(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Reboot / Force Re-login modal state
+  const [rebootTarget, setRebootTarget] = useState<
+    | { type: 'all' }
+    | { type: 'single'; device: DeviceStatusSummary }
+    | null
+  >(null);
+  const [isRebooting, setIsRebooting] = useState(false);
+
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 
   // Online / Inactive helper (< 60s is considered actively inside the app)
@@ -146,6 +159,33 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
     }
   };
 
+  const handleConfirmReboot = async () => {
+    if (!rebootTarget) return;
+    setIsRebooting(true);
+    try {
+      if (rebootTarget.type === 'all') {
+        if (onResetAllDevices) {
+          await onResetAllDevices();
+          soundManager.playSuccess();
+          setFeedbackToast('✓ Orden de reinicio enviada a todas las TC26. Pedirán nombre y usuario.');
+        }
+      } else {
+        if (onResetSingleDevice) {
+          await onResetSingleDevice(rebootTarget.device.userNumber, rebootTarget.device.deviceId);
+          soundManager.playSuccess();
+          setFeedbackToast(`✓ Orden enviada a ${rebootTarget.device.deviceName}. Pedirá nombre y usuario.`);
+        }
+      }
+    } catch {
+      soundManager.playError();
+      setFeedbackToast('Error al enviar orden de reinicio');
+    } finally {
+      setIsRebooting(false);
+      setRebootTarget(null);
+      setTimeout(() => setFeedbackToast(null), 4000);
+    }
+  };
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
       {/* Header and Live Status */}
@@ -192,7 +232,19 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Reiniciar Monitoreo en Vivo</span>
-              <span className="sm:hidden">Reiniciar</span>
+              <span className="sm:hidden">Reiniciar Monitoreo</span>
+            </button>
+          )}
+
+          {onResetAllDevices && (
+            <button
+              onClick={() => setRebootTarget({ type: 'all' })}
+              className="px-2.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 shadow-sm"
+              title="Forzar a todas las terminales TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Reiniciar Dispositivos (Re-login)</span>
+              <span className="sm:hidden">Reiniciar Dispositivos</span>
             </button>
           )}
 
@@ -328,6 +380,17 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
                       <span>{badge.label}</span>
                     </span>
 
+                    {/* Force Re-login button per device */}
+                    {onResetSingleDevice && (
+                      <button
+                        onClick={() => setRebootTarget({ type: 'single', device: dev })}
+                        title={`Cerrar sesión de ${dev.userNumber ? `Usuario ${dev.userNumber}` : dev.deviceName} y pedir nombre y usuario en 1er conteo`}
+                        className="opacity-70 group-hover:opacity-100 p-1 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded transition-all"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
                     {/* Delete button per device */}
                     {onDeleteTerminalSession && (
                       <button
@@ -437,6 +500,67 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
               <button
                 onClick={() => setDeleteTarget(null)}
                 disabled={isDeleting}
+                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMACIÓN DE REINICIO DE TERMINALES (FORZAR RE-LOGIN Y 1ER CONTEO) */}
+      {rebootTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-100">
+          <div className="bg-slate-900 border-2 border-amber-500 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative">
+            <button
+              onClick={() => !isRebooting && setRebootTarget(null)}
+              disabled={isRebooting}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
+                  {rebootTarget.type === 'all'
+                    ? '¿Reiniciar todas las terminales TC26?'
+                    : `¿Cerrar sesión de ${rebootTarget.device.userNumber ? `Usuario ${rebootTarget.device.userNumber}` : rebootTarget.device.deviceName}?`}
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  {rebootTarget.type === 'all'
+                    ? 'Se enviará la orden remota a todas las handhelds para cerrar su sesión actual, regresar al 1er conteo y abrir la pantalla de inicio para que cada operador elija su nombre y usuario nuevamente.'
+                    : `La terminal de ${rebootTarget.device.operatorName} cerrará su sesión, regresará a 1er Conteo y pedirá nombre y selección de usuario nuevamente.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                onClick={handleConfirmReboot}
+                disabled={isRebooting}
+                className="min-h-[44px] px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {isRebooting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                    <span>Enviando orden...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-4 h-4" />
+                    <span>Sí, Forzar Re-login</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => setRebootTarget(null)}
+                disabled={isRebooting}
                 className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all"
               >
                 Cancelar

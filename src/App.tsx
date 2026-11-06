@@ -28,6 +28,8 @@ import {
   isRunningInApkOrStandalone,
   loadLastAppliedResetTime,
   saveLastAppliedResetTime,
+  loadLastAppliedRebootTime,
+  saveLastAppliedRebootTime,
   normalizeRound
 } from './utils/storage';
 import { 
@@ -43,8 +45,10 @@ import {
   pushSharepointSettings,
   fetchSharepointSettings,
   deleteTerminalSession,
-  clearAllTerminalSessions
+  clearAllTerminalSessions,
+  sendDeviceRebootCommand
 } from './utils/syncService';
+import { soundManager } from './utils/audioHaptics';
 import { Header } from './components/Header';
 import { ScannerView } from './components/ScannerView';
 import { HistoryView } from './components/HistoryView';
@@ -77,6 +81,7 @@ export default function App() {
   const [isDeviceSetupOpen, setIsDeviceSetupOpen] = useState(false);
   const [isMasterAuthOpen, setIsMasterAuthOpen] = useState(false);
   const [isHandheldCheckInOpen, setIsHandheldCheckInOpen] = useState(false);
+  const [handheldRebootNotice, setHandheldRebootNotice] = useState<string | null>(null);
 
   // Cloud terminal sessions from Supabase
   const [cloudTerminalSessions, setCloudTerminalSessions] = useState<DeviceStatusSummary[]>([]);
@@ -177,15 +182,66 @@ export default function App() {
 
       let isResetTriggered = false;
 
-      // 1. Fetch round control & check for global or user reset commands from Gerencia
+      // 1. Fetch round control & check for global or user reset / reboot commands from Gerencia
       try {
         const control = await fetchRoundControl(supabaseConfig);
         if (isMounted && control) {
-          const lastApplied = loadLastAppliedResetTime();
+          const lastAppliedReset = loadLastAppliedResetTime();
+          const lastAppliedReboot = loadLastAppliedRebootTime();
 
-          // Check global reset command (e.g. Gerente clicked "Reiniciar monitoreo en vivo")
-          if (control.globalResetAt) {
-            const isNewer = !lastApplied || new Date(control.globalResetAt).getTime() > new Date(lastApplied).getTime();
+          // A) DEVICE REBOOT / FORCE RE-LOGIN CHECK (Forces operator check-in screen & 1er Conteo)
+          let shouldForceReboot = false;
+          let rebootTimestamp = '';
+
+          // Global device reboot command from Gerente
+          if (control.deviceRebootAt) {
+            const isNewer = !lastAppliedReboot || new Date(control.deviceRebootAt).getTime() > new Date(lastAppliedReboot).getTime();
+            if (isNewer) {
+              shouldForceReboot = true;
+              rebootTimestamp = control.deviceRebootAt;
+            }
+          }
+
+          // Individual user reboot command (e.g. Gerente clicked Re-login on Usuario 2)
+          if (!shouldForceReboot && control.userReboots && deviceInfo.userNumber && control.userReboots[String(deviceInfo.userNumber)]) {
+            const userRebootTime = control.userReboots[String(deviceInfo.userNumber)];
+            const isNewer = !lastAppliedReboot || new Date(userRebootTime).getTime() > new Date(lastAppliedReboot).getTime();
+            if (isNewer) {
+              shouldForceReboot = true;
+              rebootTimestamp = userRebootTime;
+            }
+          }
+
+          if (shouldForceReboot) {
+            isResetTriggered = true;
+            saveLastAppliedRebootTime(rebootTimestamp);
+            saveLastAppliedResetTime(rebootTimestamp);
+            soundManager.playWarning();
+            setScans([]);
+            saveScans([]);
+            deletedScanIdsRef.current.clear();
+            setCountRound('1ER_CONTEO');
+            saveCountRound('1ER_CONTEO');
+            unlockUserNumberCycle(true);
+            const freshDev = loadDeviceInfo();
+            setDeviceInfo(freshDev);
+            setHandheldRebootNotice(
+              'Gerencia ha reiniciado los dispositivos para comenzar una nueva prueba. Ingresa tu nombre y selecciona tu usuario del 1 al 10.'
+            );
+            setIsHandheldCheckInOpen(true);
+            if (supabaseConfig.isEnabled) {
+              pushTerminalPresence(
+                freshDev,
+                '1ER_CONTEO',
+                { totalScans: 0, totalPieces: 0 },
+                supabaseConfig
+              ).catch(() => {});
+            }
+          }
+
+          // B) NORMAL RESET CHECK (Clears scans without resetting operator binding if not rebooted)
+          if (!shouldForceReboot && control.globalResetAt) {
+            const isNewer = !lastAppliedReset || new Date(control.globalResetAt).getTime() > new Date(lastAppliedReset).getTime();
             if (isNewer) {
               isResetTriggered = true;
               saveLastAppliedResetTime(control.globalResetAt);
@@ -203,10 +259,9 @@ export default function App() {
             }
           }
 
-          // Check individual user reset command (e.g. Gerente clicked "Borrar" on this user's box)
-          if (!isResetTriggered && control.userResets && deviceInfo.userNumber && control.userResets[deviceInfo.userNumber]) {
+          if (!shouldForceReboot && !isResetTriggered && control.userResets && deviceInfo.userNumber && control.userResets[deviceInfo.userNumber]) {
             const userResetTime = control.userResets[deviceInfo.userNumber];
-            const isNewer = !lastApplied || new Date(userResetTime).getTime() > new Date(lastApplied).getTime();
+            const isNewer = !lastAppliedReset || new Date(userResetTime).getTime() > new Date(lastAppliedReset).getTime();
             if (isNewer) {
               isResetTriggered = true;
               saveLastAppliedResetTime(userResetTime);
@@ -224,18 +279,31 @@ export default function App() {
             }
           }
 
+          // C) Global round synchronization
           if (control.globalRound && control.globalRound !== countRound) {
             setCountRound(control.globalRound);
             saveCountRound(control.globalRound);
             if (control.globalRound === 'CONTEO_FINALIZADO') {
-              unlockUserNumberCycle();
+              unlockUserNumberCycle(false);
               setDeviceInfo(loadDeviceInfo());
             }
           }
+
+          // D) Individual user rounds synchronization (Gerente assignment takes precedence)
           if (control.userRounds && Object.keys(control.userRounds).length > 0) {
             setUserRounds(control.userRounds);
             saveUserRounds(control.userRounds);
+
+            // If handheld is assigned to a user number, guarantee local round matches server assignment
+            if (deviceInfo.userNumber && control.userRounds[deviceInfo.userNumber]) {
+              const serverUserRound = control.userRounds[deviceInfo.userNumber];
+              if (serverUserRound !== activeDeviceRound) {
+                setCountRound(serverUserRound);
+                saveCountRound(serverUserRound);
+              }
+            }
           }
+
           if (control.authorizations && Object.keys(control.authorizations).length > 0) {
             setRound2Authorizations(control.authorizations);
             saveRound2Authorizations(control.authorizations);
@@ -251,24 +319,45 @@ export default function App() {
         if (isMounted) {
           setCloudTerminalSessions(remoteSessions);
 
-          // If current handheld is registered, check if its session was marked 'reset'
-          if (!isResetTriggered && deviceInfo.userNumber) {
+          // If current handheld is registered, check if its session was marked 'force_relogin' or 'reset'
+          if (!isResetTriggered && (deviceInfo.userNumber || deviceInfo.deviceId)) {
             const mySession = remoteSessions.find(
-              (s) => s.userNumber === deviceInfo.userNumber || s.deviceId === deviceInfo.deviceId
+              (s) => (deviceInfo.userNumber && s.userNumber === deviceInfo.userNumber) || s.deviceId === deviceInfo.deviceId
             );
-            if (mySession && mySession.status === 'reset') {
+            if (mySession && (mySession.status === 'force_relogin' || mySession.status === 'reset')) {
               isResetTriggered = true;
               const nowIso = new Date().toISOString();
               saveLastAppliedResetTime(nowIso);
+              saveLastAppliedRebootTime(nowIso);
               setScans([]);
               saveScans([]);
               deletedScanIdsRef.current.clear();
-              pushTerminalPresence(
-                deviceInfo,
-                activeDeviceRound,
-                { totalScans: 0, totalPieces: 0 },
-                supabaseConfig
-              ).catch(() => {});
+              setCountRound('1ER_CONTEO');
+              saveCountRound('1ER_CONTEO');
+
+              if (mySession.status === 'force_relogin') {
+                soundManager.playWarning();
+                unlockUserNumberCycle(true);
+                const freshDev = loadDeviceInfo();
+                setDeviceInfo(freshDev);
+                setHandheldRebootNotice(
+                  'Gerencia ha reiniciado este dispositivo. Ingresa tu nombre y selecciona tu usuario (1 al 10).'
+                );
+                setIsHandheldCheckInOpen(true);
+                pushTerminalPresence(
+                  freshDev,
+                  '1ER_CONTEO',
+                  { totalScans: 0, totalPieces: 0 },
+                  supabaseConfig
+                ).catch(() => {});
+              } else {
+                pushTerminalPresence(
+                  deviceInfo,
+                  activeDeviceRound,
+                  { totalScans: 0, totalPieces: 0 },
+                  supabaseConfig
+                ).catch(() => {});
+              }
             }
           }
         }
@@ -276,34 +365,41 @@ export default function App() {
         // ignore
       }
 
-      // 3. Fetch cloud scans, merge, and auto-save only if not recently reset
+      // 3. Fetch cloud scans and sync authoritatively to local state
       if (!isResetTriggered) {
         try {
           const rawRemoteScans = await fetchCloudScans(supabaseConfig);
           if (isMounted) {
-            const remoteScans = rawRemoteScans.filter((s) => s.sku !== 'TEST-SKU' && !deletedScanIdsRef.current.has(s.id));
-            const remoteIds = new Set(remoteScans.map((s) => s.id));
+            const remoteScans = rawRemoteScans.filter(
+              (s) => (!s.sku || !s.sku.startsWith('TEST-SKU')) && !deletedScanIdsRef.current.has(s.id)
+            );
 
             setScans((prev) => {
-              // Only push unpushed scans if prev has items
-              if (prev.length > 0) {
-                const unpushed = prev.filter(
-                  (s) => s.sku !== 'TEST-SKU' && !remoteIds.has(s.id) && !deletedScanIdsRef.current.has(s.id)
-                );
-                if (unpushed.length > 0) {
-                  for (const item of unpushed) {
-                    pushScanToSupabase(item, supabaseConfig);
+              const map = new Map<string, ScannedItem>();
+
+              // 1. Authoritative cloud scans from Supabase
+              for (const remote of remoteScans) {
+                if (!deletedScanIdsRef.current.has(remote.id)) {
+                  map.set(remote.id, remote);
+                }
+              }
+
+              // 2. Preserve local in-flight or recent scans (< 5 min old) not yet in Supabase
+              const nowMs = Date.now();
+              for (const local of prev) {
+                if (deletedScanIdsRef.current.has(local.id)) continue;
+                if (!map.has(local.id)) {
+                  const scanAgeMs = nowMs - new Date(local.timestamp).getTime();
+                  const isRecentOrPending =
+                    local.syncStateSharepoint === 'pending' ||
+                    isNaN(scanAgeMs) ||
+                    scanAgeMs < 5 * 60 * 1000;
+                  if (isRecentOrPending && (!local.sku || !local.sku.startsWith('TEST-SKU'))) {
+                    map.set(local.id, local);
                   }
                 }
               }
 
-              const map = new Map<string, ScannedItem>();
-              for (const s of remoteScans) map.set(s.id, s);
-              for (const s of prev) {
-                if (!map.has(s.id) && s.sku !== 'TEST-SKU' && !deletedScanIdsRef.current.has(s.id)) {
-                  map.set(s.id, s);
-                }
-              }
               const merged = Array.from(map.values()).sort(
                 (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
               );
@@ -543,10 +639,10 @@ export default function App() {
     return count;
   };
 
-  // Delete a single scan from Supabase (Master user only)
+  // Delete a single scan from Supabase (Gerente and Master)
   const handleDeleteScanFromSupabase = async (scanId: string): Promise<boolean> => {
-    if (userRole !== 'MASTER') {
-      throw new Error('Solo el usuario Master tiene permisos para eliminar registros de Supabase.');
+    if (userRole !== 'MASTER' && userRole !== 'GERENTE') {
+      throw new Error('Solo los usuarios autorizados (Gerente o Master) pueden eliminar registros de Supabase.');
     }
     deletedScanIdsRef.current.add(scanId);
     const ok = await deleteScanFromSupabase(scanId, supabaseConfig);
@@ -560,22 +656,39 @@ export default function App() {
     return ok;
   };
 
-  // Delete all scans from Supabase (Master user only)
+  // Delete all scans from Supabase (Gerente and Master)
   const handleDeleteAllScansFromSupabase = async (): Promise<boolean> => {
-    if (userRole !== 'MASTER') {
-      throw new Error('Solo el usuario Master tiene permisos para eliminar registros de Supabase.');
+    if (userRole !== 'MASTER' && userRole !== 'GERENTE') {
+      throw new Error('Solo los usuarios autorizados (Gerente o Master) pueden eliminar registros de Supabase.');
     }
-    for (const scan of scans) {
-      deletedScanIdsRef.current.add(scan.id);
-    }
+    const nowIso = new Date().toISOString();
+    saveLastAppliedResetTime(nowIso);
+    deletedScanIdsRef.current.clear();
+    setScans([]);
+    saveScans([]);
+
+    // 1. Delete all records from inventory_scans table in Supabase
     const ok = await deleteAllScansFromSupabase(supabaseConfig);
-    if (ok) {
-      setScans([]);
-      saveScans([]);
-      // Clear live terminal sessions as well so live monitor does not show old counts
-      await clearAllTerminalSessions(supabaseConfig);
-      setCloudTerminalSessions([]);
+
+    // 2. Broadcast global reset to inventory_round_control so all connected handhelds clear local caches
+    await pushRoundControl(countRound, userRounds, round2Authorizations, supabaseConfig, {
+      globalResetAt: nowIso,
+    });
+
+    // 3. Clear live terminal sessions in Supabase and locally
+    await clearAllTerminalSessions(supabaseConfig);
+    setCloudTerminalSessions([]);
+
+    // 4. If current device is bound to an operator, ping reset with 0 counts
+    if (deviceInfo.userNumber) {
+      pushTerminalPresence(
+        deviceInfo,
+        activeDeviceRound,
+        { totalScans: 0, totalPieces: 0 },
+        supabaseConfig
+      ).catch(() => {});
     }
+
     return ok;
   };
 
@@ -586,14 +699,13 @@ export default function App() {
     }
     deletedScanIdsRef.current.clear();
     const rawRemoteScans = await fetchCloudScans(supabaseConfig);
-    const remoteScans = rawRemoteScans.filter((s) => s.sku !== 'TEST-SKU');
-    const remoteIds = new Set(remoteScans.map((s) => s.id));
+    const remoteScans = rawRemoteScans.filter((s) => !s.sku || !s.sku.startsWith('TEST-SKU'));
 
     setScans((prev) => {
       const map = new Map<string, ScannedItem>();
       for (const s of remoteScans) map.set(s.id, s);
       for (const s of prev) {
-        if (!map.has(s.id) && s.sku !== 'TEST-SKU' && !deletedScanIdsRef.current.has(s.id)) {
+        if (!map.has(s.id) && (!s.sku || !s.sku.startsWith('TEST-SKU')) && !deletedScanIdsRef.current.has(s.id)) {
           map.set(s.id, s);
         }
       }
@@ -760,27 +872,13 @@ export default function App() {
 
   const totalTerminalScans = deviceSummaries.reduce((sum, d) => sum + (d.totalScans || 0), 0);
 
-  // Exact round count distribution:
-  // 1. When itemized records are loaded from Supabase / local capture, they are the authoritative count per round
-  // 2. If no itemized records are loaded yet, fall back to known terminal total distribution (26 each for 78 scans)
-  let roundCounts = {
+  // Exact round count distribution strictly derived from itemized records:
+  // When records are deleted from Supabase, all rounds immediately drop to 0
+  const roundCounts = {
     round1: itemizedRound1,
     round2: itemizedRound2,
     round3: itemizedRound3,
   };
-
-  if (totalItemized === 0 && totalTerminalScans > 0) {
-    if (totalTerminalScans === 78) {
-      roundCounts = { round1: 26, round2: 26, round3: 26 };
-    } else {
-      const perRound = Math.floor(totalTerminalScans / 3);
-      roundCounts = {
-        round1: perRound,
-        round2: perRound,
-        round3: totalTerminalScans - perRound * 2,
-      };
-    }
-  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
@@ -810,6 +908,7 @@ export default function App() {
             userRole={userRole}
             deviceInfo={deviceInfo}
             round2Authorizations={round2Authorizations}
+            supabaseConfig={supabaseConfig}
             onOpenDeviceSetup={() => setIsDeviceSetupOpen(true)}
             onOpenMasterAuth={() => setIsMasterAuthOpen(true)}
             onOpenPowerAutomate={() => setActiveTab('powerautomate')}

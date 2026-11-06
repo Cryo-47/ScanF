@@ -12,10 +12,11 @@ import {
   Edit2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { CountRound, ScannedItem, PowerAutomateConfig, UserRole, DeviceInfo } from '../types/inventory';
+import { CountRound, ScannedItem, PowerAutomateConfig, SupabaseConfig, UserRole, DeviceInfo } from '../types/inventory';
 import { parseInventoryQr, isPickingFila1 } from '../utils/qrParser';
 import { soundManager } from '../utils/audioHaptics';
 import { normalizeRound, generateUUID } from '../utils/storage';
+import { checkCloudDuplicateLocalizador } from '../utils/syncService';
 
 interface ScannerViewProps {
   onScanComplete: (item: ScannedItem) => Promise<void>;
@@ -27,6 +28,7 @@ interface ScannerViewProps {
   userRole: UserRole;
   deviceInfo: DeviceInfo;
   round2Authorizations?: Record<number, boolean>;
+  supabaseConfig?: SupabaseConfig;
   onOpenDeviceSetup: () => void;
   onOpenMasterAuth: () => void;
   onOpenPowerAutomate: () => void;
@@ -43,6 +45,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   userRole,
   deviceInfo,
   round2Authorizations = {},
+  supabaseConfig,
   onOpenDeviceSetup,
   onOpenMasterAuth,
   onOpenPowerAutomate,
@@ -78,6 +81,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     sku: string;
     localizador: string;
     prevTime: string;
+    operator?: string;
+    round?: string;
   } | null>(null);
 
   // Success Feedback
@@ -114,7 +119,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     const normalizedEffectiveRound = normalizeRound(effectiveRound);
     const existingInRound = scans.filter(
       (s) =>
-        s.localizador.trim().toUpperCase() === cleanLoc &&
+        (s.localizador || '').trim().toUpperCase() === cleanLoc &&
         normalizeRound(s.conteoRound) === normalizedEffectiveRound
     );
 
@@ -122,10 +127,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       handleClearBoxes();
       setIsConfirmUploadOpen(false);
       soundManager.playWarning();
+      const match = existingInRound[0];
       setDuplicateWarning({
-        sku: existingInRound[0].sku || currentSku || 'N/A',
+        sku: match.sku || currentSku || 'N/A',
         localizador: cleanLoc,
-        prevTime: new Date(existingInRound[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        prevTime: new Date(match.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        operator: match.operador || match.nombreOperadorCompleto || 'Este dispositivo',
+        round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
       });
       return true;
     }
@@ -151,7 +159,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       return;
     }
 
-    // Check for duplicate LOCALIZADOR in current count round
+    // 1. Instant check for duplicate LOCALIZADOR in current count round (memory cache)
     if (checkDuplicateLocalizador(parsed.localizador, parsed.sku)) {
       return;
     }
@@ -164,6 +172,24 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     setLocalizador(parsed.localizador);
     setRawQrScanned(clean);
     soundManager.playSuccess();
+
+    // 2. Immediate asynchronous check against Supabase Cloud to catch scans just submitted by other handhelds
+    if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      checkCloudDuplicateLocalizador(parsed.localizador, effectiveRound, supabaseConfig).then((cloudCheck) => {
+        if (cloudCheck.isDuplicate) {
+          handleClearBoxes();
+          setIsConfirmUploadOpen(false);
+          soundManager.playWarning();
+          setDuplicateWarning({
+            sku: cloudCheck.sku || parsed.sku || 'N/A',
+            localizador: parsed.localizador.trim().toUpperCase(),
+            prevTime: cloudCheck.prevTime || 'recientemente',
+            operator: cloudCheck.operator || 'Otro dispositivo',
+            round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
+          });
+        }
+      }).catch(() => {});
+    }
 
     // Clear buffer
     setHardwareBuffer('');
@@ -290,9 +316,29 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const handleConfirmUpload = async () => {
     if (!sku || cantidad === '' || !localizador) return;
 
-    // Double check that localizador was not already scanned in this round (canonical comparison)
+    // 1. Double check that localizador was not already scanned in this round (canonical comparison in memory)
     if (checkDuplicateLocalizador(localizador, sku)) {
       return;
+    }
+
+    // 2. Real-time verification against Supabase cloud to prevent concurrent cross-device duplicate upload
+    if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      setIsUploading(true);
+      const cloudCheck = await checkCloudDuplicateLocalizador(localizador, effectiveRound, supabaseConfig);
+      setIsUploading(false);
+      if (cloudCheck.isDuplicate) {
+        handleClearBoxes();
+        setIsConfirmUploadOpen(false);
+        soundManager.playWarning();
+        setDuplicateWarning({
+          sku: cloudCheck.sku || sku || 'N/A',
+          localizador: localizador.trim().toUpperCase(),
+          prevTime: cloudCheck.prevTime || 'recientemente',
+          operator: cloudCheck.operator || 'Otro dispositivo',
+          round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
+        });
+        return;
+      }
     }
 
     // Dismiss dialog immediately to free UI
@@ -735,12 +781,27 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   }
                 }
               }}
-              onKeyDown={(e) => {
+              onKeyDown={async (e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   const targetVal = (e.target as HTMLInputElement).value;
                   if (checkDuplicateLocalizador(targetVal, sku)) {
                     return;
+                  }
+                  if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+                    const cloudCheck = await checkCloudDuplicateLocalizador(targetVal, effectiveRound, supabaseConfig);
+                    if (cloudCheck.isDuplicate) {
+                      handleClearBoxes();
+                      soundManager.playWarning();
+                      setDuplicateWarning({
+                        sku: cloudCheck.sku || sku || 'N/A',
+                        localizador: targetVal.trim().toUpperCase(),
+                        prevTime: cloudCheck.prevTime || 'recientemente',
+                        operator: cloudCheck.operator || 'Otro dispositivo',
+                        round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
+                      });
+                      return;
+                    }
                   }
                 }
               }}
@@ -754,11 +815,26 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         <div className="pt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Button 1: Subir Información a Excel */}
           <button
-            onClick={() => {
+            onClick={async () => {
               if (hasDataInBoxes) {
                 // Verify if manually entered or edited localizador is a duplicate before opening modal
                 if (checkDuplicateLocalizador(localizador, sku)) {
                   return;
+                }
+                if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+                  const cloudCheck = await checkCloudDuplicateLocalizador(localizador, effectiveRound, supabaseConfig);
+                  if (cloudCheck.isDuplicate) {
+                    handleClearBoxes();
+                    soundManager.playWarning();
+                    setDuplicateWarning({
+                      sku: cloudCheck.sku || sku || 'N/A',
+                      localizador: localizador.trim().toUpperCase(),
+                      prevTime: cloudCheck.prevTime || 'recientemente',
+                      operator: cloudCheck.operator || 'Otro dispositivo',
+                      round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
+                    });
+                    return;
+                  }
                 }
                 setIsConfirmUploadOpen(true);
               }
@@ -922,16 +998,17 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
             <div className="space-y-1">
               <div className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-mono text-[11px] font-bold inline-block mb-1">
-                LOCALIZADOR YA ESCANEADO
+                LOCALIZADOR YA ESCANEADO EN ESTA RONDA
               </div>
               <h3 className="text-base font-bold text-white tracking-tight leading-snug">
-                El Localizador {duplicateWarning.localizador} ya fue escaneado en esta ronda
+                El Localizador {duplicateWarning.localizador} ya fue escaneado en {duplicateWarning.round || 'esta ronda'}
               </h3>
               <p className="text-xs text-amber-300 font-semibold leading-relaxed">
                 ¡Información eliminada automáticamente de los cuadros para evitar duplicados en Excel y Supabase!
               </p>
               <p className="text-xs text-slate-400 leading-normal">
-                Ubicación registrada previamente a las <strong>{duplicateWarning.prevTime}</strong> (SKU: {duplicateWarning.sku}).
+                Ubicación registrada previamente a las <strong>{duplicateWarning.prevTime}</strong>
+                {duplicateWarning.operator ? <> por <strong>{duplicateWarning.operator}</strong></> : null} (SKU: {duplicateWarning.sku}).
               </p>
             </div>
 
@@ -942,7 +1019,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   setDuplicateWarning(null);
                   refocusScanner();
                 }}
-                className="w-full min-h-[52px] py-3 px-4 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-sm sm:text-base rounded-xl transition-all shadow-md flex items-center justify-center gap-2 whitespace-nowrap"
+                className="w-full min-h-[52px] py-3 px-4 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-sm sm:text-base rounded-xl transition-all shadow-md flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
                 autoFocus
               >
                 <Check className="w-5 h-5 shrink-0" />

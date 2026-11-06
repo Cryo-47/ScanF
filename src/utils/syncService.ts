@@ -338,6 +338,68 @@ export async function fetchCloudScans(
 }
 
 /**
+ * Check if a localizador has already been scanned in the given count round in Supabase Cloud
+ * Enables instant cross-device duplicate detection across handheld terminals
+ */
+export async function checkCloudDuplicateLocalizador(
+  localizador: string,
+  round: CountRound,
+  supabaseConfig?: SupabaseConfig
+): Promise<{ isDuplicate: boolean; sku?: string; prevTime?: string; operator?: string }> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return { isDuplicate: false };
+  }
+
+  const cleanLoc = (localizador || '').trim().toUpperCase();
+  if (!cleanLoc) return { isDuplicate: false };
+
+  const normRound = normalizeRound(round);
+  const roundMap: Record<string, string> = {
+    '1ER_CONTEO': '1er Conteo',
+    '2DO_CONTEO': '2do Conteo',
+    '3ER_CONTEO': '3er Conteo',
+    'CONTEO_FINALIZADO': 'Finalizado',
+  };
+  const humanRound = roundMap[normRound] || normRound;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 1500);
+
+  try {
+    const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?localizador=eq.${encodeURIComponent(cleanLoc)}&or=(ronda_conteo.eq.${encodeURIComponent(normRound)},ronda_conteo.eq.${encodeURIComponent(humanRound)})&select=id,sku,localizador,ronda_conteo,fecha_hora,operador&limit=1`;
+
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseConfig.anonKey.trim(),
+        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+      },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return { isDuplicate: false };
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      const match = data[0];
+      const prevTime = match.fecha_hora 
+        ? new Date(match.fecha_hora).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'recientemente';
+      return {
+        isDuplicate: true,
+        sku: String(match.sku || 'N/A'),
+        prevTime,
+        operator: String(match.operador || 'Otro dispositivo'),
+      };
+    }
+    return { isDuplicate: false };
+  } catch {
+    return { isDuplicate: false };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
  * Delete a single scan record from Supabase table (Master user only)
  */
 export async function deleteScanFromSupabase(
@@ -404,7 +466,9 @@ export async function pushRoundControl(
   supabaseConfig?: SupabaseConfig,
   resets?: {
     globalResetAt?: string;
-    userResets?: Record<string, string>;
+    userResets?: Record<string, string | unknown>;
+    deviceRebootAt?: string;
+    userReboots?: Record<string, string>;
   }
 ): Promise<boolean> {
   if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
@@ -423,8 +487,14 @@ export async function pushRoundControl(
   if (resets?.globalResetAt) {
     payload.global_reset_at = resets.globalResetAt;
   }
+  if (resets?.deviceRebootAt) {
+    payload.device_reboot_at = resets.deviceRebootAt;
+  }
   if (resets?.userResets) {
     payload.user_resets = resets.userResets;
+  }
+  if (resets?.userReboots) {
+    payload.user_reboots = resets.userReboots;
   }
 
   try {
@@ -456,6 +526,8 @@ export async function fetchRoundControl(
   authorizations: Record<number, boolean>;
   globalResetAt?: string;
   userResets?: Record<string, string>;
+  deviceRebootAt?: string;
+  userReboots?: Record<string, string>;
 } | null> {
   if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
     return null;
@@ -477,15 +549,147 @@ export async function fetchRoundControl(
     if (!Array.isArray(data) || data.length === 0) return null;
 
     const row = data[0];
+    const userResetsObj = (row.user_resets as Record<string, any>) || {};
+
+    const deviceRebootAt = row.device_reboot_at
+      ? String(row.device_reboot_at)
+      : userResetsObj.global_reboot_at
+      ? String(userResetsObj.global_reboot_at)
+      : undefined;
+
+    const userReboots = (row.user_reboots as Record<string, string>) ||
+      (userResetsObj.user_reboots as Record<string, string>) ||
+      undefined;
+
     return {
       globalRound: (row.global_round as CountRound) || '1ER_CONTEO',
       userRounds: (row.user_rounds as Record<number, CountRound>) || {},
       authorizations: (row.round2_authorizations as Record<number, boolean>) || {},
       globalResetAt: row.global_reset_at ? String(row.global_reset_at) : undefined,
       userResets: (row.user_resets as Record<string, string>) || undefined,
+      deviceRebootAt,
+      userReboots,
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Sends a reboot / re-login command to all connected handheld devices or a specific user number
+ * When received, the handheld clears its operator session, resets its round to 1er Conteo,
+ * and opens the check-in modal prompting for full name and user selection.
+ */
+export async function sendDeviceRebootCommand(
+  targetUserNumber?: number,
+  supabaseConfig?: SupabaseConfig
+): Promise<boolean> {
+  if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    return false;
+  }
+
+  const nowIso = new Date().toISOString();
+
+  if (targetUserNumber) {
+    // 1. Target single user (e.g. Usuario 2)
+    const userKey = String(targetUserNumber);
+    const existingControl = await fetchRoundControl(supabaseConfig);
+    const prevResets = existingControl?.userResets || {};
+    const updatedUserResets = {
+      ...prevResets,
+      [userKey]: nowIso,
+      user_reboots: {
+        ...((existingControl?.userReboots) || {}),
+        [userKey]: nowIso,
+      },
+    };
+
+    const updatedUserRounds = {
+      ...(existingControl?.userRounds || {}),
+      [targetUserNumber]: '1ER_CONTEO' as CountRound,
+    };
+
+    await pushRoundControl(
+      existingControl?.globalRound || '1ER_CONTEO',
+      updatedUserRounds,
+      existingControl?.authorizations || {},
+      supabaseConfig,
+      {
+        userResets: updatedUserResets,
+        userReboots: { [userKey]: nowIso },
+      }
+    );
+
+    // Update terminal session in Supabase with status 'force_relogin'
+    try {
+      const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?user_number=eq.${targetUserNumber}`;
+      await fetch(endpoint, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': supabaseConfig.anonKey.trim(),
+          'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        },
+        body: JSON.stringify({
+          status: 'force_relogin',
+          current_round: '1ER_CONTEO',
+          total_scans: 0,
+          total_piezas: 0,
+          updated_at: nowIso,
+        }),
+      });
+    } catch {}
+
+    return true;
+  } else {
+    // 2. Global Reboot (all users & terminals)
+    const defaultRounds: Record<number, CountRound> = {};
+    for (let i = 1; i <= 10; i++) defaultRounds[i] = '1ER_CONTEO';
+
+    const defaultAuth: Record<number, boolean> = {};
+    for (let i = 1; i <= 10; i++) defaultAuth[i] = true;
+
+    const allUserReboots: Record<string, string> = {};
+    for (let i = 1; i <= 10; i++) allUserReboots[String(i)] = nowIso;
+
+    await pushRoundControl(
+      '1ER_CONTEO',
+      defaultRounds,
+      defaultAuth,
+      supabaseConfig,
+      {
+        globalResetAt: nowIso,
+        deviceRebootAt: nowIso,
+        userResets: {
+          global_reboot_at: nowIso,
+          user_reboots: allUserReboots,
+        },
+        userReboots: allUserReboots,
+      }
+    );
+
+    // Broadcast force_relogin to all terminal sessions
+    try {
+      const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?device_id=not.is.null`;
+      await fetch(endpoint, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': supabaseConfig.anonKey.trim(),
+          'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        },
+        body: JSON.stringify({
+          status: 'force_relogin',
+          current_round: '1ER_CONTEO',
+          total_scans: 0,
+          total_piezas: 0,
+          operator_name: 'Sin asignar',
+          updated_at: nowIso,
+        }),
+      });
+    } catch {}
+
+    return true;
   }
 }
 

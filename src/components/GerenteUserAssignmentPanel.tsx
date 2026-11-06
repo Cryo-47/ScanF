@@ -24,6 +24,8 @@ interface GerenteUserAssignmentPanelProps {
   authorizations?: Record<number, boolean>;
   onToggleUser?: (userNumber: number) => void;
   onSetAllUsers?: (enabled: boolean) => void;
+  onResetUserDevice?: (userNumber: number) => void;
+  onResetAllDevices?: () => void;
 }
 
 export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProps> = ({
@@ -33,6 +35,8 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
   onSetAllUsersRound,
   scans,
   deviceSummaries,
+  onResetUserDevice,
+  onResetAllDevices,
 }) => {
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
@@ -166,6 +170,16 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
           >
             Reiniciar Todos a 1er Conteo
           </button>
+          {onResetAllDevices && (
+            <button
+              onClick={onResetAllDevices}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/40 hover:border-rose-400 transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
+              title="Forzar a todas las handhelds TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+              <span>Reiniciar Dispositivos (Re-login)</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -325,6 +339,22 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                       </button>
                     </div>
                   </div>
+                )}
+                {/* Botón para forzar Re-login individual de este usuario */}
+                {onResetUserDevice && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundManager.playWarning();
+                      onResetUserDevice(u.userNum);
+                      showFeedback(`⚡ Se envió orden de re-login a ${u.userLabel}. Su terminal pedirá nombre y usuario.`);
+                    }}
+                    className="w-full mt-1.5 px-2 py-1 rounded text-[10px] font-medium text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/30 flex items-center justify-center gap-1 transition-all"
+                    title={`Cerrar sesión remota de ${u.userLabel} y obligar a pedir nombre y usuario de nuevo en 1er conteo`}
+                  >
+                    <RotateCcw className="w-2.5 h-2.5 text-rose-400" />
+                    <span>Pedir Usuario / Re-login</span>
+                  </button>
                 )}
               </div>
             </div>

@@ -9,7 +9,9 @@ import {
   ShieldAlert,
   Layers,
   Sparkles,
-  Users
+  Users,
+  Trash2,
+  Database
 } from 'lucide-react';
 import { CountRound, DeviceStatusSummary } from '../types/inventory';
 import { soundManager } from '../utils/audioHaptics';
@@ -25,6 +27,7 @@ interface GerenteRoundControlProps {
   totalScans: number;
   userRounds?: Record<number, CountRound>;
   deviceSummaries?: DeviceStatusSummary[];
+  onOpenDeleteAllScans?: () => void;
 }
 
 export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
@@ -34,6 +37,7 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
   totalScans,
   userRounds,
   deviceSummaries,
+  onOpenDeleteAllScans,
 }) => {
   const [confirmModal, setConfirmModal] = useState<{
     targetRound: CountRound;
@@ -363,9 +367,21 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
           )}
         </div>
 
-        {/* Action: Reiniciar Ciclo (always available as emergency / reset option) */}
-        {currentRound !== '1ER_CONTEO' && currentRound !== 'CONTEO_FINALIZADO' && (
-          <div className="pt-1 flex justify-end">
+        {/* Additional Manager Controls (Reset Cycle & Delete Scans from Supabase) */}
+        <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/40">
+          {onOpenDeleteAllScans ? (
+            <button
+              onClick={onOpenDeleteAllScans}
+              className="text-[11px] text-rose-300 hover:text-white flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 transition-all active:scale-95 cursor-pointer shadow-sm font-semibold"
+              title="Borrar permanentemente todos los datos de los códigos QR escaneados que se guardan en Supabase"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <Database className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span>Borrar datos QR de Supabase</span>
+            </button>
+          ) : <div />}
+
+          {currentRound !== '1ER_CONTEO' && currentRound !== 'CONTEO_FINALIZADO' && (
             <button
               onClick={() =>
                 handleOpenConfirm(
@@ -381,8 +397,8 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reiniciar ciclo al 1er Conteo</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Confirmation Modal */}

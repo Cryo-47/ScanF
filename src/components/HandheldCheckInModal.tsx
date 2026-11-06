@@ -26,6 +26,7 @@ interface HandheldCheckInModalProps {
   cloudTerminalSessions?: DeviceStatusSummary[];
   scans?: ScannedItem[];
   supabaseConfig?: SupabaseConfig;
+  rebootNotice?: string | null;
 }
 
 export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
@@ -37,11 +38,12 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
   cloudTerminalSessions = [],
   scans = [],
   supabaseConfig,
+  rebootNotice,
 }) => {
-  const isAlreadyLocked = Boolean(deviceInfo.isUserNumberLocked && deviceInfo.userNumber);
+  const isAlreadyLocked = Boolean(!rebootNotice && deviceInfo.isUserNumberLocked && deviceInfo.userNumber);
   
-  const [selectedUserNum, setSelectedUserNum] = useState<number | null>(deviceInfo.userNumber || null);
-  const [fullName, setFullName] = useState(deviceInfo.operatorName || '');
+  const [selectedUserNum, setSelectedUserNum] = useState<number | null>(rebootNotice ? null : (deviceInfo.userNumber || null));
+  const [fullName, setFullName] = useState(rebootNotice ? '' : (deviceInfo.operatorName || ''));
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [liveSessions, setLiveSessions] = useState<DeviceStatusSummary[]>(cloudTerminalSessions);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
@@ -201,6 +203,17 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Gerencia Remote Reboot Notice Banner */}
+        {rebootNotice && (
+          <div className="p-3.5 bg-amber-950/80 border-2 border-amber-500/70 rounded-2xl flex items-start gap-3 text-amber-200 text-xs shadow-lg animate-in fade-in">
+            <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-bold text-amber-300 text-sm">Dispositivo Reiniciado por Gerencia</div>
+              <p className="text-amber-200/90 leading-relaxed text-[11px]">{rebootNotice}</p>
+            </div>
+          </div>
+        )}
 
         {/* Current Round & Cloud Sync Indicator */}
         <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">

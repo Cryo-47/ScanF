@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   USER_ROUNDS: 'tc26_user_rounds_v3',
   IS_APK: 'tc26_is_apk_mode_v1',
   LAST_RESET_TIME: 'tc26_last_applied_reset_time_v1',
+  LAST_REBOOT_TIME: 'tc26_last_applied_reboot_v2',
 };
 
 export const DEFAULT_CONFIG: PowerAutomateConfig = {
@@ -164,6 +165,20 @@ export function saveLastAppliedResetTime(timestamp: string): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEYS.LAST_RESET_TIME, timestamp);
+  } catch {
+    // ignore
+  }
+}
+
+export function loadLastAppliedRebootTime(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(STORAGE_KEYS.LAST_REBOOT_TIME);
+}
+
+export function saveLastAppliedRebootTime(timestamp: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.LAST_REBOOT_TIME, timestamp);
   } catch {
     // ignore
   }
@@ -373,14 +388,20 @@ export function saveDeviceInfo(info: DeviceInfo): void {
   }
 }
 
-export function unlockUserNumberCycle(): void {
+export function unlockUserNumberCycle(clearOperator = true): void {
   const current = loadDeviceInfo();
   saveDeviceInfo({
     ...current,
     isUserNumberLocked: false,
     userNumber: undefined,
+    operatorName: clearOperator ? '' : current.operatorName,
     registeredRound: undefined,
   });
+  if (clearOperator) {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.OPERATOR);
+    } catch {}
+  }
 }
 
 export function loadOperatorName(): string {
