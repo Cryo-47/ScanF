@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   IS_APK: 'tc26_is_apk_mode_v1',
   LAST_RESET_TIME: 'tc26_last_applied_reset_time_v1',
   LAST_REBOOT_TIME: 'tc26_last_applied_reboot_v2',
+  AUTO_UPLOAD: 'tc26_auto_upload_v1',
 };
 
 export const DEFAULT_CONFIG: PowerAutomateConfig = {
@@ -212,6 +213,24 @@ export function loadMasterPin(): string {
 export function saveMasterPin(pin: string): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(STORAGE_KEYS.MASTER_PIN, pin);
+}
+
+export function loadAutoUploadMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(STORAGE_KEYS.AUTO_UPLOAD) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function saveAutoUploadMode(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEYS.AUTO_UPLOAD, String(enabled));
+  } catch {
+    // ignore
+  }
 }
 
 export function loadPowerAutomateConfig(): PowerAutomateConfig {

@@ -353,9 +353,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         onDeleteTerminalSession={onDeleteTerminalSession}
         onClearAllTerminalSessions={onClearAllTerminalSessions}
         onResetAllDevices={onResetAllDevices}
-        onResetSingleDevice={async (userNumber) => {
+        onResetSingleDevice={async (userNumber, deviceId) => {
           if (userNumber && onResetUserDevice) {
             await onResetUserDevice(userNumber);
+          } else if (deviceId && onResetUserDevice) {
+            const found = deviceSummaries.find((d) => d.deviceId === deviceId);
+            if (found?.userNumber) {
+              await onResetUserDevice(found.userNumber);
+            }
           }
         }}
       />

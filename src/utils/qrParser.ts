@@ -103,16 +103,43 @@ export const SAMPLE_QR_CODES = [
 ];
 
 /**
+ * Normalizes locator string for uniform comparison: trims, uppercases, unifies separators
+ */
+export function normalizeLocator(loc: string | undefined | null): string {
+  if (!loc) return '';
+  return loc.trim().toUpperCase().replace(/\s*[-_.]\s*/g, '-').replace(/\s+/g, '');
+}
+
+/**
+ * Standardizes locator to a canonical form removing leading zeros in numeric parts (e.g. A-22-01 -> A-22-1)
+ */
+export function canonicalizeLocator(loc: string | undefined | null): string {
+  if (!loc) return '';
+  const clean = loc.trim().toUpperCase();
+  const parts = clean.split(/[-_\s.]+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  const normalizedParts = parts.map((p, idx) => {
+    if (idx > 0 && /^\d+$/.test(p)) {
+      return String(parseInt(p, 10));
+    }
+    return p;
+  });
+  return normalizedParts.join('-');
+}
+
+/**
  * Detects if a locator corresponds to Level/Fila 1 (Picking area where goods move constantly)
- * Expected structure: Letra-Fila-Columna (e.g. A-1-3, B-1-12, L-1-54, A_1_3)
+ * Expected structure: Letra del rack - Columna - Fila (e.g. A-22-1, B-4-1, L-12-01, A_22_1)
+ * Level 1 (Picking) is the LAST segment: 1 or 01
  */
 export function isPickingFila1(locator: string): boolean {
   if (!locator) return false;
   const clean = locator.trim().toUpperCase();
-  const parts = clean.split(/[-_\s]+/);
-  // Must have Letra, Fila 1, and Columna (e.g. A-1-3, B-1-54)
+  const parts = clean.split(/[-_\s.]+/).filter(Boolean);
+  // Must have Rack, Columna, and Fila (e.g. A-22-1, B-4-01)
   if (parts.length >= 3) {
-    return (parts[1] === '1' || parts[1] === '01') && parts[2].length > 0;
+    const lastPart = parts[parts.length - 1];
+    return (lastPart === '1' || lastPart === '01') && parts[1].length > 0;
   }
-  return /^[A-Z][-_\s]+0?1[-_\s]+\d+/i.test(clean);
+  return /^[A-Z][-_\s.]+\d+[-_\s.]+0?1$/i.test(clean);
 }

@@ -13,9 +13,9 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CountRound, ScannedItem, PowerAutomateConfig, SupabaseConfig, UserRole, DeviceInfo } from '../types/inventory';
-import { parseInventoryQr, isPickingFila1 } from '../utils/qrParser';
+import { parseInventoryQr, isPickingFila1, canonicalizeLocator } from '../utils/qrParser';
 import { soundManager } from '../utils/audioHaptics';
-import { normalizeRound, generateUUID } from '../utils/storage';
+import { normalizeRound, generateUUID, loadAutoUploadMode, saveAutoUploadMode } from '../utils/storage';
 import { checkCloudDuplicateLocalizador } from '../utils/syncService';
 
 interface ScannerViewProps {
@@ -29,6 +29,9 @@ interface ScannerViewProps {
   deviceInfo: DeviceInfo;
   round2Authorizations?: Record<number, boolean>;
   supabaseConfig?: SupabaseConfig;
+  pendingSharepointCount?: number;
+  onManualRetryQueue?: () => Promise<void>;
+  isRetryingQueue?: boolean;
   onOpenDeviceSetup: () => void;
   onOpenMasterAuth: () => void;
   onOpenPowerAutomate: () => void;
@@ -46,6 +49,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   deviceInfo,
   round2Authorizations = {},
   supabaseConfig,
+  pendingSharepointCount = 0,
+  onManualRetryQueue,
+  isRetryingQueue = false,
   onOpenDeviceSetup,
   onOpenMasterAuth,
   onOpenPowerAutomate,
@@ -89,6 +95,40 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
+  // POKA-YOKE 5: Auto-Upload Fast Mode (1.5s countdown before automatic upload)
+  const [autoUploadEnabled, setAutoUploadEnabled] = useState<boolean>(() => loadAutoUploadMode());
+  const [countdownMs, setCountdownMs] = useState<number | null>(null);
+  const autoUploadTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoUploadIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const cancelAutoUploadTimer = () => {
+    if (autoUploadTimerRef.current) {
+      clearTimeout(autoUploadTimerRef.current);
+      autoUploadTimerRef.current = null;
+    }
+    if (autoUploadIntervalRef.current) {
+      clearInterval(autoUploadIntervalRef.current);
+      autoUploadIntervalRef.current = null;
+    }
+    setCountdownMs(null);
+  };
+
+  const handleToggleAutoUpload = () => {
+    const next = !autoUploadEnabled;
+    setAutoUploadEnabled(next);
+    saveAutoUploadMode(next);
+    if (!next) {
+      cancelAutoUploadTimer();
+    }
+  };
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      cancelAutoUploadTimer();
+    };
+  }, []);
+
   // Keep scanner focused on SKU input when initially ready, but NEVER steal focus if user is typing
   useEffect(() => {
     if (!isConfirmUploadOpen && !isConfirmRetryOpen && !duplicateWarning) {
@@ -102,6 +142,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, sku]);
 
   const handleClearBoxes = () => {
+    cancelAutoUploadTimer();
     setSku('');
     setCantidad('');
     setDescripcion('');
@@ -117,11 +158,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     if (!cleanLoc) return false;
 
     const normalizedEffectiveRound = normalizeRound(effectiveRound);
-    const existingInRound = scans.filter(
-      (s) =>
-        (s.localizador || '').trim().toUpperCase() === cleanLoc &&
-        normalizeRound(s.conteoRound) === normalizedEffectiveRound
-    );
+    const canonLoc = canonicalizeLocator(cleanLoc);
+
+    const existingInRound = scans.filter((s) => {
+      if (normalizeRound(s.conteoRound) !== normalizedEffectiveRound) return false;
+      const sLoc = (s.localizador || '').trim().toUpperCase();
+      const sCanon = canonicalizeLocator(sLoc);
+      return sLoc === cleanLoc || (canonLoc && sCanon === canonLoc);
+    });
 
     if (existingInRound.length > 0) {
       handleClearBoxes();
@@ -140,8 +184,139 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     return false;
   };
 
+  // Comprehensive duplicate validation: checks both local memory and Supabase Cloud
+  // Halts upload, clears boxes, sounds warning, and opens modal alert if duplicate in current round
+  const validateDuplicate = async (targetLoc: string, currentSku?: string): Promise<boolean> => {
+    const cleanLoc = (targetLoc || '').trim();
+    if (!cleanLoc) return false;
+
+    // 1. Instant check against local scans
+    if (checkDuplicateLocalizador(cleanLoc, currentSku)) {
+      return true;
+    }
+
+    // 2. Real-time check against Supabase Cloud
+    if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      try {
+        const cloudCheck = await checkCloudDuplicateLocalizador(cleanLoc, effectiveRound, supabaseConfig);
+        if (cloudCheck.isDuplicate) {
+          handleClearBoxes();
+          setIsConfirmUploadOpen(false);
+          soundManager.playWarning();
+          setDuplicateWarning({
+            sku: cloudCheck.sku || currentSku || 'N/A',
+            localizador: cleanLoc.toUpperCase(),
+            prevTime: cloudCheck.prevTime || 'recientemente',
+            operator: cloudCheck.operator || 'Otro dispositivo',
+            round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
+          });
+          return true;
+        }
+      } catch {
+        // network fallback
+      }
+    }
+    return false;
+  };
+
+  const refocusScanner = () => {
+    // Dismiss any virtual soft keyboard on handheld by blurring active elements
+    if (document.activeElement && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setTimeout(() => {
+      if (!sku && skuInputRef.current) {
+        skuInputRef.current.focus({ preventScroll: true });
+      } else if (hardwareInputRef.current) {
+        hardwareInputRef.current.value = '';
+        hardwareInputRef.current.focus({ preventScroll: true });
+      }
+    }, 60);
+  };
+
+  // Execute upload after confirmation or via fast auto-upload countdown
+  const handleConfirmUpload = async (overrideData?: {
+    sku: string;
+    cantidad: number;
+    descripcion: string;
+    subinventario: string;
+    localizador: string;
+    rawQr: string;
+  }) => {
+    cancelAutoUploadTimer();
+    const targetSku = (overrideData?.sku ?? sku).trim();
+    const targetCantidad = overrideData?.cantidad ?? cantidad;
+    const targetDesc = (overrideData?.descripcion ?? descripcion).trim();
+    const targetSubinv = (overrideData?.subinventario ?? subinventario).trim();
+    const targetLoc = (overrideData?.localizador ?? localizador).trim();
+    const targetRaw = overrideData?.rawQr ?? rawQrScanned;
+
+    if (!targetSku || targetCantidad === '' || !targetLoc) return;
+
+    // Double check that localizador / QR was not already scanned in this round (local and Supabase Cloud)
+    setIsUploading(true);
+    const isDup = await validateDuplicate(targetLoc, targetSku);
+    setIsUploading(false);
+    if (isDup) {
+      return;
+    }
+
+    // Dismiss dialog immediately to free UI
+    setIsConfirmUploadOpen(false);
+
+    // El número de usuario es el que se plasma en el archivo de Excel en la columna de usuario
+    const userExcelVal = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : (deviceInfo.operatorName || 'Usuario 1');
+    const isPicking = isPickingFila1(targetLoc);
+
+    const newItem: ScannedItem = {
+      id: generateUUID(),
+      sku: targetSku,
+      cantidad: Number(targetCantidad),
+      descripcion: targetDesc || (isPicking ? 'PICKING FILA 1' : ''),
+      subinventario: targetSubinv || 'LINEA',
+      localizador: targetLoc,
+      conteoRound: effectiveRound,
+      rawQr: targetRaw || `${targetSku}_${targetCantidad}_${targetDesc || 'PICKING FILA 1'}_${targetSubinv || 'LINEA'}_${targetLoc}`,
+      timestamp: new Date().toISOString(),
+      operador: userExcelVal,
+      nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
+      userNumber: deviceInfo.userNumber,
+      dispositivo: deviceInfo.deviceName || 'Zebra TC26',
+      syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
+    };
+
+    const uploadedSku = targetSku;
+    const uploadedQty = targetCantidad;
+
+    // Clear boxes immediately and refocus scanner so next scan is ready in < 50ms
+    handleClearBoxes();
+    refocusScanner();
+
+    confetti({
+      particleCount: 20,
+      spread: 40,
+      origin: { y: 0.8 },
+      colors: ['#10b981', '#f59e0b'],
+    });
+
+    setUploadFeedback(`✓ ${uploadedSku} (${uploadedQty} pzs) registrado. Guardando en Excel...`);
+    setTimeout(() => setUploadFeedback(null), 3000);
+
+    // Run upload without locking down UI interactions
+    setIsUploading(true);
+    try {
+      await onScanComplete(newItem);
+    } catch {
+      // Background sync will update status
+    } finally {
+      setIsUploading(false);
+      refocusScanner();
+    }
+  };
+
   // Process scanned QR and populate the 5 text boxes
   const handleProcessBarcode = (qrString: string) => {
+    cancelAutoUploadTimer();
     const clean = qrString.trim();
     if (!clean) return;
 
@@ -177,6 +352,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
       checkCloudDuplicateLocalizador(parsed.localizador, effectiveRound, supabaseConfig).then((cloudCheck) => {
         if (cloudCheck.isDuplicate) {
+          cancelAutoUploadTimer();
           handleClearBoxes();
           setIsConfirmUploadOpen(false);
           soundManager.playWarning();
@@ -189,6 +365,40 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           });
         }
       }).catch(() => {});
+    }
+
+    // 3. POKA-YOKE 5: Auto-upload countdown (1.5s) if auto-upload is enabled and it is NOT picking Fila 1
+    const isPicking = isPickingFila1(parsed.localizador);
+    if (autoUploadEnabled && !isPicking) {
+      const TOTAL_MS = 1500;
+      const INTERVAL = 50;
+      let remaining = TOTAL_MS;
+      setCountdownMs(remaining);
+
+      autoUploadIntervalRef.current = setInterval(() => {
+        remaining -= INTERVAL;
+        if (remaining <= 0) {
+          if (autoUploadIntervalRef.current) {
+            clearInterval(autoUploadIntervalRef.current);
+            autoUploadIntervalRef.current = null;
+          }
+          setCountdownMs(null);
+        } else {
+          setCountdownMs(remaining);
+        }
+      }, INTERVAL);
+
+      autoUploadTimerRef.current = setTimeout(() => {
+        cancelAutoUploadTimer();
+        handleConfirmUpload({
+          sku: parsed.sku,
+          cantidad: parsed.cantidad,
+          descripcion: parsed.descripcion,
+          subinventario: parsed.subinventario,
+          localizador: parsed.localizador,
+          rawQr: clean,
+        });
+      }, TOTAL_MS);
     }
 
     // Clear buffer
@@ -312,107 +522,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     };
   }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, effectiveRound, scans]);
 
-  // Execute upload after confirmation
-  const handleConfirmUpload = async () => {
-    if (!sku || cantidad === '' || !localizador) return;
-
-    // 1. Double check that localizador was not already scanned in this round (canonical comparison in memory)
-    if (checkDuplicateLocalizador(localizador, sku)) {
-      return;
-    }
-
-    // 2. Real-time verification against Supabase cloud to prevent concurrent cross-device duplicate upload
-    if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
-      setIsUploading(true);
-      const cloudCheck = await checkCloudDuplicateLocalizador(localizador, effectiveRound, supabaseConfig);
-      setIsUploading(false);
-      if (cloudCheck.isDuplicate) {
-        handleClearBoxes();
-        setIsConfirmUploadOpen(false);
-        soundManager.playWarning();
-        setDuplicateWarning({
-          sku: cloudCheck.sku || sku || 'N/A',
-          localizador: localizador.trim().toUpperCase(),
-          prevTime: cloudCheck.prevTime || 'recientemente',
-          operator: cloudCheck.operator || 'Otro dispositivo',
-          round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
-        });
-        return;
-      }
-    }
-
-    // Dismiss dialog immediately to free UI
-    setIsConfirmUploadOpen(false);
-
-    // El número de usuario es el que se plasma en el archivo de Excel en la columna de usuario
-    const userExcelVal = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : (deviceInfo.operatorName || 'Usuario 1');
-
-    const newItem: ScannedItem = {
-      id: generateUUID(),
-      sku: sku.trim(),
-      cantidad: Number(cantidad),
-      descripcion: descripcion.trim() || (isFila1Picking ? 'PICKING FILA 1' : ''),
-      subinventario: subinventario.trim() || 'LINEA',
-      localizador: localizador.trim(),
-      conteoRound: effectiveRound,
-      rawQr: rawQrScanned || `${sku}_${cantidad}_${descripcion || 'PICKING FILA 1'}_${subinventario || 'LINEA'}_${localizador}`,
-      timestamp: new Date().toISOString(),
-      operador: userExcelVal,
-      nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
-      userNumber: deviceInfo.userNumber,
-      dispositivo: deviceInfo.deviceName || 'Zebra TC26',
-      syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
-    };
-
-    const uploadedSku = sku.trim();
-    const uploadedQty = cantidad;
-
-    // Clear boxes immediately and refocus scanner so next scan is ready in < 50ms
-    handleClearBoxes();
-    refocusScanner();
-
-    confetti({
-      particleCount: 20,
-      spread: 40,
-      origin: { y: 0.8 },
-      colors: ['#10b981', '#f59e0b'],
-    });
-
-    setUploadFeedback(`✓ ${uploadedSku} (${uploadedQty} pzs) registrado. Guardando en Excel...`);
-    setTimeout(() => setUploadFeedback(null), 3000);
-
-    // Run upload without locking down UI interactions
-    setIsUploading(true);
-    try {
-      await onScanComplete(newItem);
-    } catch {
-      // Background sync will update status
-    } finally {
-      setIsUploading(false);
-      refocusScanner();
-    }
-  };
-
   // Clear boxes after retry confirmation
   const handleConfirmRetry = () => {
     handleClearBoxes();
     setIsConfirmRetryOpen(false);
     refocusScanner();
-  };
-
-  const refocusScanner = () => {
-    // Dismiss any virtual soft keyboard on handheld by blurring active elements
-    if (document.activeElement && document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-    setTimeout(() => {
-      if (!sku && skuInputRef.current) {
-        skuInputRef.current.focus({ preventScroll: true });
-      } else if (hardwareInputRef.current) {
-        hardwareInputRef.current.value = '';
-        hardwareInputRef.current.focus({ preventScroll: true });
-      }
-    }, 60);
   };
 
   const hasDataInBoxes = Boolean(sku || cantidad !== '' || descripcion || localizador);
@@ -512,6 +626,28 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </button>
           )}
 
+          {/* POKA-YOKE 5: Auto-Upload Fast Mode Toggle */}
+          <button
+            type="button"
+            onClick={handleToggleAutoUpload}
+            title={
+              autoUploadEnabled
+                ? 'Modo Rápido Activado: Sube a Excel automáticamente en 1.5s (excepto Fila 1 de picking)'
+                : 'Modo Rápido Desactivado: Requiere confirmar antes de subir'
+            }
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border active:scale-95 ${
+              autoUploadEnabled
+                ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border-emerald-500/50 shadow-sm'
+                : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
+            }`}
+          >
+            <span className={autoUploadEnabled ? 'text-emerald-400 animate-pulse' : 'text-slate-500'}>⚡</span>
+            <span className="hidden xs:inline">{autoUploadEnabled ? 'Auto-Subida' : 'Manual'}</span>
+            <span className="font-mono text-[10px] px-1 py-0.2 rounded bg-slate-900/90 text-slate-300 border border-slate-700/60">
+              {autoUploadEnabled ? '1.5s' : 'Off'}
+            </span>
+          </button>
+
           {userRole === 'MASTER' && (
             <button
               onClick={onOpenMasterAuth}
@@ -533,6 +669,30 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             <span className="truncate">{uploadFeedback}</span>
           </div>
           <button onClick={() => setUploadFeedback(null)} className="text-slate-400 hover:text-white px-1">✕</button>
+        </div>
+      )}
+
+      {/* POKA-YOKE 4: Offline SharePoint Sync Queue Indicator with Manual Retry */}
+      {pendingSharepointCount > 0 && (
+        <div className="bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs px-3.5 py-2.5 rounded-xl flex items-center justify-between shadow-sm animate-in fade-in gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-amber-400 text-sm shrink-0">{isRetryingQueue ? '🔄' : '⏳'}</span>
+            <div className="truncate text-left">
+              <span className="font-bold text-white">{pendingSharepointCount}</span>{' '}
+              <span>{pendingSharepointCount === 1 ? 'registro pendiente' : 'registros pendientes'} en cola de envío a Excel</span>
+              <span className="text-slate-400 text-[10px] block sm:inline sm:ml-1 font-mono">
+                (auto-reintento silencioso)
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onManualRetryQueue?.()}
+            disabled={isRetryingQueue}
+            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs rounded-lg transition-all shrink-0 ml-1 disabled:opacity-50 flex items-center gap-1 shadow-sm cursor-pointer"
+          >
+            <span>{isRetryingQueue ? 'Subiendo...' : 'Reintentar'}</span>
+          </button>
         </div>
       )}
 
@@ -585,13 +745,39 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                     <span>Ubicación de Picking Detectada: Fila 1 ({localizador.trim()})</span>
                   </div>
                   <span className="text-[11px] text-amber-200/90 leading-tight block mt-0.5">
-                    En Fila 1 los productos se mueven constantemente. La casilla de <strong>SKU</strong> está desbloqueada para que ingreses el código manualmente.
+                    En Fila 1 los productos se mueven constantemente. Auto-subida pausada para verificación física; la casilla de <strong>SKU</strong> está desbloqueada.
                   </span>
                 </div>
               </div>
               <span className="px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold bg-amber-500 text-slate-950 shrink-0 shadow-sm">
                 Fila 1 (Picking)
               </span>
+            </div>
+          )}
+
+          {/* POKA-YOKE 5: Active Countdown Progress Bar */}
+          {countdownMs !== null && (
+            <div className="p-3.5 bg-emerald-950/80 border-2 border-emerald-500 rounded-xl space-y-2 animate-in fade-in shadow-lg shadow-emerald-950/50">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 font-bold text-emerald-300">
+                  <span className="animate-pulse text-base">⚡</span>
+                  <span>Subiendo automáticamente a Excel en <strong className="text-white font-mono text-sm">{(countdownMs / 1000).toFixed(1)}s</strong>...</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelAutoUploadTimer}
+                  className="px-3 py-1 bg-slate-900 hover:bg-slate-800 active:scale-95 text-rose-300 hover:text-white rounded-lg text-xs font-bold border border-rose-500/50 transition-all flex items-center gap-1 shadow-sm cursor-pointer"
+                >
+                  <span>✕ Cancelar</span>
+                </button>
+              </div>
+              {/* Visual Progress Bar */}
+              <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden p-0.5 border border-emerald-500/30">
+                <div 
+                  className="bg-gradient-to-r from-emerald-500 to-amber-400 h-full transition-all duration-75 ease-linear rounded-full"
+                  style={{ width: `${Math.max(0, Math.min(100, ((1500 - countdownMs) / 1500) * 100))}%` }}
+                />
+              </div>
             </div>
           )}
 
@@ -635,11 +821,18 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             inputMode={isFila1Picking ? "text" : "none"}
             value={sku}
             onChange={(e) => {
+              cancelAutoUploadTimer();
               const val = e.target.value;
               if (val.split('_').length >= 5) {
                 if (tryParseAndDistribute(val)) return;
               }
               setSku(val.toUpperCase());
+            }}
+            onBlur={async (e) => {
+              const val = e.target.value.trim();
+              if (val && localizador.trim()) {
+                await validateDuplicate(localizador, val);
+              }
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -687,6 +880,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             inputMode="numeric"
             value={cantidad}
             onChange={(e) => {
+              cancelAutoUploadTimer();
               const val = e.target.value;
               if (val.includes('_') && val.split('_').length >= 5) {
                 if (tryParseAndDistribute(val)) return;
@@ -738,6 +932,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               type="text"
               value={subinventario}
               onChange={(e) => {
+                cancelAutoUploadTimer();
                 const val = e.target.value;
                 if (val.includes('_') && val.split('_').length >= 5) {
                   if (tryParseAndDistribute(val)) return;
@@ -767,6 +962,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               type="text"
               value={localizador}
               onChange={(e) => {
+                cancelAutoUploadTimer();
                 const val = e.target.value;
                 if (val.includes('_') && val.split('_').length >= 5) {
                   if (tryParseAndDistribute(val)) return;
@@ -781,31 +977,22 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   }
                 }
               }}
+              onBlur={async (e) => {
+                const val = e.target.value.trim();
+                if (val) {
+                  await validateDuplicate(val, sku);
+                }
+              }}
               onKeyDown={async (e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  const targetVal = (e.target as HTMLInputElement).value;
-                  if (checkDuplicateLocalizador(targetVal, sku)) {
-                    return;
-                  }
-                  if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
-                    const cloudCheck = await checkCloudDuplicateLocalizador(targetVal, effectiveRound, supabaseConfig);
-                    if (cloudCheck.isDuplicate) {
-                      handleClearBoxes();
-                      soundManager.playWarning();
-                      setDuplicateWarning({
-                        sku: cloudCheck.sku || sku || 'N/A',
-                        localizador: targetVal.trim().toUpperCase(),
-                        prevTime: cloudCheck.prevTime || 'recientemente',
-                        operator: cloudCheck.operator || 'Otro dispositivo',
-                        round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
-                      });
-                      return;
-                    }
+                  const targetVal = (e.target as HTMLInputElement).value.trim();
+                  if (targetVal) {
+                    await validateDuplicate(targetVal, sku);
                   }
                 }
               }}
-              placeholder="Ej. A-1-3"
+              placeholder="Ej. A-22-1"
               className="w-full min-h-[48px] py-2.5 px-3.5 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl font-mono text-xs sm:text-sm font-bold text-emerald-400 placeholder:text-slate-600 focus:outline-none transition-colors leading-normal"
             />
           </div>
@@ -817,24 +1004,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           <button
             onClick={async () => {
               if (hasDataInBoxes) {
-                // Verify if manually entered or edited localizador is a duplicate before opening modal
-                if (checkDuplicateLocalizador(localizador, sku)) {
+                // Verify duplicate locally and in cloud for manual entry or scanned item
+                setIsUploading(true);
+                const isDup = await validateDuplicate(localizador, sku);
+                setIsUploading(false);
+                if (isDup) {
                   return;
-                }
-                if (supabaseConfig?.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
-                  const cloudCheck = await checkCloudDuplicateLocalizador(localizador, effectiveRound, supabaseConfig);
-                  if (cloudCheck.isDuplicate) {
-                    handleClearBoxes();
-                    soundManager.playWarning();
-                    setDuplicateWarning({
-                      sku: cloudCheck.sku || sku || 'N/A',
-                      localizador: localizador.trim().toUpperCase(),
-                      prevTime: cloudCheck.prevTime || 'recientemente',
-                      operator: cloudCheck.operator || 'Otro dispositivo',
-                      round: effectiveRound === '3ER_CONTEO' ? '3er Conteo' : (effectiveRound === '2DO_CONTEO' ? '2do Conteo' : '1er Conteo'),
-                    });
-                    return;
-                  }
                 }
                 setIsConfirmUploadOpen(true);
               }
@@ -921,7 +1096,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             {/* Modal Action Buttons with Roomy Spacing */}
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
-                onClick={handleConfirmUpload}
+                onClick={() => handleConfirmUpload()}
                 disabled={isUploading}
                 className="min-h-[48px] px-3 sm:px-4 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 whitespace-nowrap"
                 autoFocus

@@ -46,7 +46,8 @@ import {
   fetchSharepointSettings,
   deleteTerminalSession,
   clearAllTerminalSessions,
-  sendDeviceRebootCommand
+  sendDeviceRebootCommand,
+  retryPendingScansQueue
 } from './utils/syncService';
 import { soundManager } from './utils/audioHaptics';
 import { Header } from './components/Header';
@@ -82,6 +83,9 @@ export default function App() {
   const [isMasterAuthOpen, setIsMasterAuthOpen] = useState(false);
   const [isHandheldCheckInOpen, setIsHandheldCheckInOpen] = useState(false);
   const [handheldRebootNotice, setHandheldRebootNotice] = useState<string | null>(null);
+
+  // POKA-YOKE 4: Offline Auto-Retry Queue State
+  const [isRetryingQueue, setIsRetryingQueue] = useState(false);
 
   // Cloud terminal sessions from Supabase
   const [cloudTerminalSessions, setCloudTerminalSessions] = useState<DeviceStatusSummary[]>([]);
@@ -528,6 +532,55 @@ export default function App() {
     })();
   };
 
+  // POKA-YOKE 4: Offline Auto-Retry Queue for SharePoint Excel
+  const processRetryQueue = React.useCallback(async () => {
+    if (!powerAutomateConfig.isEnabled || !powerAutomateConfig.webhookUrl) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    if (isRetryingQueue) return;
+
+    const hasPending = scans.some(
+      (s) => s.sku !== 'TEST-SKU' && (s.syncStateSharepoint === 'pending' || s.syncStateSharepoint === 'failed')
+    );
+    if (!hasPending) return;
+
+    setIsRetryingQueue(true);
+    try {
+      const result = await retryPendingScansQueue(scans, powerAutomateConfig, supabaseConfig, 3);
+      if (result.syncedCount > 0) {
+        setScans(result.updatedScans);
+        saveScans(result.updatedScans);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsRetryingQueue(false);
+    }
+  }, [scans, powerAutomateConfig, supabaseConfig, isRetryingQueue]);
+
+  useEffect(() => {
+    // 1. Run retry check periodically every 15 seconds
+    const interval = setInterval(() => {
+      processRetryQueue();
+    }, 15000);
+
+    // 2. Immediate check when re-gaining connectivity or waking up screen
+    const handleOnline = () => processRetryQueue();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        processRetryQueue();
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [processRetryQueue]);
+
   // Gerente advances an individual user (1 to 10) to 2nd count, 3rd count or returns to 1st count
   const handleSetUserRound = (userNum: number, round: CountRound) => {
     const next = {
@@ -769,6 +822,59 @@ export default function App() {
     return ok;
   };
 
+  // Remote reboot / force re-login for an individual user terminal (1 to 10)
+  const handleResetUserDevice = async (userNumber: number): Promise<void> => {
+    // 1. If the current device happens to be this user, execute local logout immediately
+    if (deviceInfo.userNumber === userNumber) {
+      soundManager.playWarning();
+      unlockUserNumberCycle(true);
+      const freshDev = loadDeviceInfo();
+      setDeviceInfo(freshDev);
+      setScans([]);
+      saveScans([]);
+      setCountRound('1ER_CONTEO');
+      saveCountRound('1ER_CONTEO');
+      setHandheldRebootNotice('Has cerrado sesión. Ingresa tu nombre y selecciona tu usuario (1 al 10).');
+      setIsHandheldCheckInOpen(true);
+    }
+
+    // 2. Broadcast reboot order via Supabase to target handheld
+    if (supabaseConfig.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      await sendDeviceRebootCommand(userNumber, supabaseConfig);
+      // Immediately refresh live sessions
+      try {
+        const freshSessions = await fetchTerminalSessions(supabaseConfig);
+        setCloudTerminalSessions(freshSessions);
+      } catch {}
+    }
+  };
+
+  // Remote reboot / force re-login for ALL handhelds (resets to 1er conteo and forces re-login)
+  const handleResetAllDevices = async (): Promise<void> => {
+    // 1. If running as operator, reset locally
+    if (userRole === 'OPERADOR_APK' || deviceInfo.userNumber) {
+      soundManager.playWarning();
+      unlockUserNumberCycle(true);
+      const freshDev = loadDeviceInfo();
+      setDeviceInfo(freshDev);
+      setScans([]);
+      saveScans([]);
+      setCountRound('1ER_CONTEO');
+      saveCountRound('1ER_CONTEO');
+      setHandheldRebootNotice('Gerencia ha reiniciado todas las terminales. Ingresa tu nombre y selecciona tu usuario (1 al 10).');
+      setIsHandheldCheckInOpen(true);
+    }
+
+    // 2. Broadcast global reboot order via Supabase
+    if (supabaseConfig.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      await sendDeviceRebootCommand(undefined, supabaseConfig);
+      try {
+        const freshSessions = await fetchTerminalSessions(supabaseConfig);
+        setCloudTerminalSessions(freshSessions);
+      } catch {}
+    }
+  };
+
   // Update Excel link directly from HistoryView
   const handleUpdateExcelLink = (newUrl: string) => {
     const updated = {
@@ -880,6 +986,11 @@ export default function App() {
     round3: itemizedRound3,
   };
 
+  // POKA-YOKE 4: Pending SharePoint Sync Queue Count
+  const pendingSharepointCount = scans.filter(
+    (s) => s.sku !== 'TEST-SKU' && (s.syncStateSharepoint === 'pending' || s.syncStateSharepoint === 'failed')
+  ).length;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* Minimalist Top Bar with Secret 12-Tap Trigger on App Logo */}
@@ -909,6 +1020,9 @@ export default function App() {
             deviceInfo={deviceInfo}
             round2Authorizations={round2Authorizations}
             supabaseConfig={supabaseConfig}
+            pendingSharepointCount={pendingSharepointCount}
+            onManualRetryQueue={processRetryQueue}
+            isRetryingQueue={isRetryingQueue}
             onOpenDeviceSetup={() => setIsDeviceSetupOpen(true)}
             onOpenMasterAuth={() => setIsMasterAuthOpen(true)}
             onOpenPowerAutomate={() => setActiveTab('powerautomate')}
@@ -939,6 +1053,8 @@ export default function App() {
             onRefreshCloudScans={handleRefreshCloudScans}
             onDeleteTerminalSession={handleDeleteTerminalSession}
             onClearAllTerminalSessions={handleClearAllTerminalSessions}
+            onResetUserDevice={handleResetUserDevice}
+            onResetAllDevices={handleResetAllDevices}
           />
         )}
 

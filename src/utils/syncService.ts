@@ -1,5 +1,6 @@
 import { ScannedItem, PowerAutomateConfig, SupabaseConfig, DeviceInfo, DeviceStatusSummary, CountRound } from '../types/inventory';
 import { isValidUUID, generateUUID, normalizeRound } from './storage';
+import { canonicalizeLocator } from './qrParser';
 
 export interface SyncResult {
   sharepointState: 'synced' | 'pending' | 'failed' | 'simulated';
@@ -362,11 +363,16 @@ export async function checkCloudDuplicateLocalizador(
   };
   const humanRound = roundMap[normRound] || normRound;
 
+  const canonLoc = canonicalizeLocator(cleanLoc);
+  const locFilter = canonLoc && canonLoc !== cleanLoc
+    ? `or=(localizador.ilike.${encodeURIComponent(cleanLoc)},localizador.ilike.${encodeURIComponent(canonLoc)})`
+    : `localizador=ilike.${encodeURIComponent(cleanLoc)}`;
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 1500);
 
   try {
-    const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?localizador=eq.${encodeURIComponent(cleanLoc)}&or=(ronda_conteo.eq.${encodeURIComponent(normRound)},ronda_conteo.eq.${encodeURIComponent(humanRound)})&select=id,sku,localizador,ronda_conteo,fecha_hora,operador&limit=1`;
+    const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?${locFilter}&or=(ronda_conteo.eq.${encodeURIComponent(normRound)},ronda_conteo.eq.${encodeURIComponent(humanRound)})&select=id,sku,localizador,ronda_conteo,fecha_hora,operador&limit=1`;
 
     const res = await fetch(endpoint, {
       method: 'GET',
@@ -974,5 +980,84 @@ export async function fetchSharepointSettings(
   } catch {
     return null;
   }
+}
+
+/**
+ * POKA-YOKE 4: Offline Auto-Retry Queue for SharePoint Excel
+ * Automatically re-attempts pending or failed scans in controlled FIFO batches.
+ * Guarantees zero dropped rows during intermittent warehouse Wi-Fi drops.
+ */
+export async function retryPendingScansQueue(
+  scans: ScannedItem[],
+  powerAutomateConfig: PowerAutomateConfig,
+  supabaseConfig?: SupabaseConfig,
+  maxBatch = 3
+): Promise<{ updatedScans: ScannedItem[]; syncedCount: number; remainingPending: number }> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const pendingTotal = scans.filter(
+      (s) => s.sku !== 'TEST-SKU' && (s.syncStateSharepoint === 'pending' || s.syncStateSharepoint === 'failed')
+    ).length;
+    return { updatedScans: scans, syncedCount: 0, remainingPending: pendingTotal };
+  }
+
+  if (!powerAutomateConfig.isEnabled || !powerAutomateConfig.webhookUrl) {
+    return { updatedScans: scans, syncedCount: 0, remainingPending: 0 };
+  }
+
+  // Find all pending or failed scans
+  const pendingIndices: number[] = [];
+  scans.forEach((scan, index) => {
+    if (
+      scan.sku !== 'TEST-SKU' &&
+      (scan.syncStateSharepoint === 'pending' || scan.syncStateSharepoint === 'failed')
+    ) {
+      pendingIndices.push(index);
+    }
+  });
+
+  if (pendingIndices.length === 0) {
+    return { updatedScans: scans, syncedCount: 0, remainingPending: 0 };
+  }
+
+  // FIFO batch processing (oldest first)
+  const batchIndices = pendingIndices.slice(0, maxBatch);
+  const updatedScans = [...scans];
+  let syncedCount = 0;
+
+  for (const idx of batchIndices) {
+    const item = updatedScans[idx];
+    try {
+      const result = await syncScannedItem(item, powerAutomateConfig, supabaseConfig);
+      if (result.sharepointState === 'synced') {
+        syncedCount++;
+        updatedScans[idx] = {
+          ...item,
+          syncStateSharepoint: 'synced',
+          syncError: undefined,
+        };
+      } else if (result.sharepointState === 'failed') {
+        updatedScans[idx] = {
+          ...item,
+          syncStateSharepoint: 'failed',
+          syncError: result.errorMessage,
+        };
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      updatedScans[idx] = {
+        ...item,
+        syncStateSharepoint: 'failed',
+        syncError: msg,
+      };
+    }
+  }
+
+  const remainingPending = pendingIndices.length - syncedCount;
+
+  return {
+    updatedScans,
+    syncedCount,
+    remainingPending: Math.max(0, remainingPending),
+  };
 }
 
