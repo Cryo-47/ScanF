@@ -90,8 +90,8 @@ CREATE INDEX IF NOT EXISTS idx_scans_created_at ON public.inventory_scans (creat
 CREATE TABLE IF NOT EXISTS public.inventory_round_control (
     id VARCHAR(50) PRIMARY KEY DEFAULT 'global_control',
     global_round VARCHAR(50) DEFAULT '1ER_CONTEO',
-    user_rounds JSONB DEFAULT '{"1":"1ER_CONTEO","2":"1ER_CONTEO","3":"1ER_CONTEO","4":"1ER_CONTEO","5":"1ER_CONTEO","6":"1ER_CONTEO","7":"1ER_CONTEO","8":"1ER_CONTEO","9":"1ER_CONTEO","10":"1ER_CONTEO"}'::jsonb,
-    round2_authorizations JSONB DEFAULT '{"1":true,"2":true,"3":true,"4":true,"5":true,"6":true,"7":true,"8":true,"9":true,"10":true}'::jsonb,
+    user_rounds JSONB DEFAULT '{"1":"1ER_CONTEO","2":"1ER_CONTEO","3":"1ER_CONTEO","4":"1ER_CONTEO","5":"1ER_CONTEO","6":"1ER_CONTEO","7":"1ER_CONTEO","8":"1ER_CONTEO","9":"1ER_CONTEO","10":"1ER_CONTEO","11":"1ER_CONTEO","12":"1ER_CONTEO","13":"1ER_CONTEO","14":"1ER_CONTEO"}'::jsonb,
+    round2_authorizations JSONB DEFAULT '{"1":true,"2":true,"3":true,"4":true,"5":true,"6":true,"7":true,"8":true,"9":true,"10":true,"11":true,"12":true,"13":true,"14":true}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 

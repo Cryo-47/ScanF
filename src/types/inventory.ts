@@ -39,7 +39,7 @@ export interface DeviceInfo {
   deviceId: string;
   deviceName: string;
   operatorName: string;
-  userNumber?: number; // 1 al 10
+  userNumber?: number; // 1 al 14
   isUserNumberLocked: boolean; // Vinculado al dispositivo durante el ciclo completo
   registeredRound?: CountRound; // Ronda para la que se solicitó el nombre completo
 }

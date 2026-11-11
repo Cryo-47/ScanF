@@ -66,7 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 shadow-md">
-      <div className="max-w-5xl mx-auto px-3 sm:px-4 h-16 flex items-center justify-between gap-2 sm:gap-4">
+      <div className="max-w-5xl mx-auto px-3 sm:px-4 min-h-16 h-auto py-2 flex flex-wrap items-center justify-between gap-2.5 sm:gap-4">
         
         {/* Zone 1: Secret 12-tap Logo "ScanF" (Inconspicuous, looks completely like standard branding) */}
         <div 

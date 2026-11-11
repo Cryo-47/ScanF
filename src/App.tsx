@@ -46,8 +46,7 @@ import {
   fetchSharepointSettings,
   deleteTerminalSession,
   clearAllTerminalSessions,
-  sendDeviceRebootCommand,
-  retryPendingScansQueue
+  sendDeviceRebootCommand
 } from './utils/syncService';
 import { soundManager } from './utils/audioHaptics';
 import { Header } from './components/Header';
@@ -83,9 +82,6 @@ export default function App() {
   const [isMasterAuthOpen, setIsMasterAuthOpen] = useState(false);
   const [isHandheldCheckInOpen, setIsHandheldCheckInOpen] = useState(false);
   const [handheldRebootNotice, setHandheldRebootNotice] = useState<string | null>(null);
-
-  // POKA-YOKE 4: Offline Auto-Retry Queue State
-  const [isRetryingQueue, setIsRetryingQueue] = useState(false);
 
   // Cloud terminal sessions from Supabase
   const [cloudTerminalSessions, setCloudTerminalSessions] = useState<DeviceStatusSummary[]>([]);
@@ -230,7 +226,7 @@ export default function App() {
             const freshDev = loadDeviceInfo();
             setDeviceInfo(freshDev);
             setHandheldRebootNotice(
-              'Gerencia ha reiniciado los dispositivos para comenzar una nueva prueba. Ingresa tu nombre y selecciona tu usuario del 1 al 10.'
+              'Gerencia ha reiniciado los dispositivos para comenzar una nueva prueba. Ingresa tu nombre y selecciona tu usuario (1 al 14).'
             );
             setIsHandheldCheckInOpen(true);
             if (supabaseConfig.isEnabled) {
@@ -345,7 +341,7 @@ export default function App() {
                 const freshDev = loadDeviceInfo();
                 setDeviceInfo(freshDev);
                 setHandheldRebootNotice(
-                  'Gerencia ha reiniciado este dispositivo. Ingresa tu nombre y selecciona tu usuario (1 al 10).'
+                  'Gerencia ha reiniciado este dispositivo. Ingresa tu nombre y selecciona tu usuario (1 al 14).'
                 );
                 setIsHandheldCheckInOpen(true);
                 pushTerminalPresence(
@@ -532,55 +528,6 @@ export default function App() {
     })();
   };
 
-  // POKA-YOKE 4: Offline Auto-Retry Queue for SharePoint Excel
-  const processRetryQueue = React.useCallback(async () => {
-    if (!powerAutomateConfig.isEnabled || !powerAutomateConfig.webhookUrl) return;
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    if (isRetryingQueue) return;
-
-    const hasPending = scans.some(
-      (s) => s.sku !== 'TEST-SKU' && (s.syncStateSharepoint === 'pending' || s.syncStateSharepoint === 'failed')
-    );
-    if (!hasPending) return;
-
-    setIsRetryingQueue(true);
-    try {
-      const result = await retryPendingScansQueue(scans, powerAutomateConfig, supabaseConfig, 3);
-      if (result.syncedCount > 0) {
-        setScans(result.updatedScans);
-        saveScans(result.updatedScans);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setIsRetryingQueue(false);
-    }
-  }, [scans, powerAutomateConfig, supabaseConfig, isRetryingQueue]);
-
-  useEffect(() => {
-    // 1. Run retry check periodically every 15 seconds
-    const interval = setInterval(() => {
-      processRetryQueue();
-    }, 15000);
-
-    // 2. Immediate check when re-gaining connectivity or waking up screen
-    const handleOnline = () => processRetryQueue();
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        processRetryQueue();
-      }
-    };
-
-    window.addEventListener('online', handleOnline);
-    document.addEventListener('visibilitychange', handleVisibility);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('online', handleOnline);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, [processRetryQueue]);
-
   // Gerente advances an individual user (1 to 10) to 2nd count, 3rd count or returns to 1st count
   const handleSetUserRound = (userNum: number, round: CountRound) => {
     const next = {
@@ -606,10 +553,10 @@ export default function App() {
     pushRoundControl(countRound, next, round2Authorizations, supabaseConfig);
   };
 
-  // Gerente advances or sets all users (1 to 10) to a round
+  // Gerente advances or sets all users (1 to 14) to a round
   const handleSetAllUsersRound = (round: CountRound) => {
     const next: Record<number, CountRound> = {};
-    for (let i = 1; i <= 10; i++) next[i] = round;
+    for (let i = 1; i <= 14; i++) next[i] = round;
     setUserRounds(next);
     saveUserRounds(next);
     setCountRound(round);
@@ -636,21 +583,21 @@ export default function App() {
 
     let nextUserRounds = { ...userRounds };
     if (newRound === '1ER_CONTEO') {
-      for (let i = 1; i <= 10; i++) nextUserRounds[i] = '1ER_CONTEO';
+      for (let i = 1; i <= 14; i++) nextUserRounds[i] = '1ER_CONTEO';
       setUserRounds(nextUserRounds);
       saveUserRounds(nextUserRounds);
       unlockUserNumberCycle();
       setDeviceInfo(loadDeviceInfo());
     } else if (newRound === '2DO_CONTEO') {
-      for (let i = 1; i <= 10; i++) nextUserRounds[i] = '2DO_CONTEO';
+      for (let i = 1; i <= 14; i++) nextUserRounds[i] = '2DO_CONTEO';
       setUserRounds(nextUserRounds);
       saveUserRounds(nextUserRounds);
     } else if (newRound === '3ER_CONTEO') {
-      for (let i = 1; i <= 10; i++) nextUserRounds[i] = '3ER_CONTEO';
+      for (let i = 1; i <= 14; i++) nextUserRounds[i] = '3ER_CONTEO';
       setUserRounds(nextUserRounds);
       saveUserRounds(nextUserRounds);
     } else if (newRound === 'CONTEO_FINALIZADO') {
-      for (let i = 1; i <= 10; i++) nextUserRounds[i] = 'CONTEO_FINALIZADO';
+      for (let i = 1; i <= 14; i++) nextUserRounds[i] = 'CONTEO_FINALIZADO';
       setUserRounds(nextUserRounds);
       saveUserRounds(nextUserRounds);
       unlockUserNumberCycle();
@@ -834,7 +781,7 @@ export default function App() {
       saveScans([]);
       setCountRound('1ER_CONTEO');
       saveCountRound('1ER_CONTEO');
-      setHandheldRebootNotice('Has cerrado sesión. Ingresa tu nombre y selecciona tu usuario (1 al 10).');
+      setHandheldRebootNotice('Has cerrado sesión. Ingresa tu nombre y selecciona tu usuario (1 al 14).');
       setIsHandheldCheckInOpen(true);
     }
 
@@ -861,7 +808,7 @@ export default function App() {
       saveScans([]);
       setCountRound('1ER_CONTEO');
       saveCountRound('1ER_CONTEO');
-      setHandheldRebootNotice('Gerencia ha reiniciado todas las terminales. Ingresa tu nombre y selecciona tu usuario (1 al 10).');
+      setHandheldRebootNotice('Gerencia ha reiniciado todas las terminales. Ingresa tu nombre y selecciona tu usuario (1 al 14).');
       setIsHandheldCheckInOpen(true);
     }
 
@@ -952,7 +899,7 @@ export default function App() {
 
   const handleSetAllUsersRound2 = (enabled: boolean) => {
     const next: Record<number, boolean> = {};
-    for (let i = 1; i <= 10; i++) next[i] = enabled;
+    for (let i = 1; i <= 14; i++) next[i] = enabled;
     setRound2Authorizations(next);
     saveRound2Authorizations(next);
 
@@ -986,11 +933,6 @@ export default function App() {
     round3: itemizedRound3,
   };
 
-  // POKA-YOKE 4: Pending SharePoint Sync Queue Count
-  const pendingSharepointCount = scans.filter(
-    (s) => s.sku !== 'TEST-SKU' && (s.syncStateSharepoint === 'pending' || s.syncStateSharepoint === 'failed')
-  ).length;
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* Minimalist Top Bar with Secret 12-Tap Trigger on App Logo */}
@@ -1006,7 +948,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6">
+      <main className={`flex-1 w-full mx-auto p-3 sm:p-6 transition-all ${activeTab === 'history' ? 'max-w-7xl' : 'max-w-5xl'}`}>
         {/* In OPERADOR_APK mode: ALWAYS render ScannerView */}
         {(activeTab === 'scanner' || userRole === 'OPERADOR_APK') && (
           <ScannerView
@@ -1020,9 +962,6 @@ export default function App() {
             deviceInfo={deviceInfo}
             round2Authorizations={round2Authorizations}
             supabaseConfig={supabaseConfig}
-            pendingSharepointCount={pendingSharepointCount}
-            onManualRetryQueue={processRetryQueue}
-            isRetryingQueue={isRetryingQueue}
             onOpenDeviceSetup={() => setIsDeviceSetupOpen(true)}
             onOpenMasterAuth={() => setIsMasterAuthOpen(true)}
             onOpenPowerAutomate={() => setActiveTab('powerautomate')}

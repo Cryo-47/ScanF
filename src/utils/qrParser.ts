@@ -128,18 +128,25 @@ export function canonicalizeLocator(loc: string | undefined | null): string {
 }
 
 /**
- * Detects if a locator corresponds to Level/Fila 1 (Picking area where goods move constantly)
- * Expected structure: Letra del rack - Columna - Fila (e.g. A-22-1, B-4-1, L-12-01, A_22_1)
- * Level 1 (Picking) is the LAST segment: 1 or 01
+ * Detects if a locator corresponds to Level/Fila 1 (Picking area where goods move constantly).
+ * Standard warehouse locator structure: Letra del Rack - Columna - Fila/Nivel
+ * Examples:
+ *   A-22-1 -> Rack: A, Columna: 22, Fila: 1  => TRUE (Picking Fila 1)
+ *   A-1-6  -> Rack: A, Columna: 1,  Fila: 6  => FALSE (Nivel 6, no es picking)
+ *   A-1-1  -> Rack: A, Columna: 1,  Fila: 1  => TRUE (Picking Fila 1)
+ *   B-4-2  -> Rack: B, Columna: 4,  Fila: 2  => FALSE (Nivel 2, no es picking)
  */
 export function isPickingFila1(locator: string): boolean {
   if (!locator) return false;
   const clean = locator.trim().toUpperCase();
   const parts = clean.split(/[-_\s.]+/).filter(Boolean);
-  // Must have Rack, Columna, and Fila (e.g. A-22-1, B-4-01)
+
+  // Must have at least 3 parts: [0] Rack, [1] Columna, [2] Fila/Nivel
   if (parts.length >= 3) {
-    const lastPart = parts[parts.length - 1];
-    return (lastPart === '1' || lastPart === '01') && parts[1].length > 0;
+    const filaSegment = parts[parts.length - 1]; // The LAST segment is Fila/Nivel
+    const filaNumber = parseInt(filaSegment, 10);
+    return filaNumber === 1;
   }
-  return /^[A-Z][-_\s.]+\d+[-_\s.]+0?1$/i.test(clean);
+
+  return false;
 }

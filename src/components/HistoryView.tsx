@@ -228,7 +228,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="w-full space-y-5">
       {/* EXCLUSIVO GERENTE: Opciones para pasar de 1er a 2do y 3er conteo, finalizar o reiniciar ciclo */}
       <GerenteRoundControl
         currentRound={currentRound}
@@ -309,8 +309,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         {/* Link preview box */}
         {!isEditingLink ? (
           <div className="space-y-1.5">
-            <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 flex items-center gap-2">
-              <span className="text-[11px] font-mono text-slate-400 select-all truncate flex-1">
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center gap-2">
+              <span className="text-[11px] font-mono text-slate-400 select-all break-all flex-1 leading-relaxed">
                 {excelUrl}
               </span>
             </div>
@@ -501,9 +501,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                         {roundName(item.conteoRound)}
                       </span>
                     </td>
-                    <td className="py-3 px-4">
+                    <td className="py-3.5 px-4 min-w-[200px]">
                       <div className="font-mono font-bold text-white text-xs">{item.sku}</div>
-                      <div className="text-[11px] text-slate-400 truncate max-w-xs">{item.descripcion}</div>
+                      <div className="text-[11px] text-slate-300 break-words line-clamp-2 leading-snug mt-0.5">{item.descripcion}</div>
                     </td>
                     <td className="py-3 px-4 text-right font-mono font-bold text-amber-400 text-sm tabular-nums">
                       {item.cantidad}

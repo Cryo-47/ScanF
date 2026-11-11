@@ -29,9 +29,6 @@ interface ScannerViewProps {
   deviceInfo: DeviceInfo;
   round2Authorizations?: Record<number, boolean>;
   supabaseConfig?: SupabaseConfig;
-  pendingSharepointCount?: number;
-  onManualRetryQueue?: () => Promise<void>;
-  isRetryingQueue?: boolean;
   onOpenDeviceSetup: () => void;
   onOpenMasterAuth: () => void;
   onOpenPowerAutomate: () => void;
@@ -49,9 +46,6 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   deviceInfo,
   round2Authorizations = {},
   supabaseConfig,
-  pendingSharepointCount = 0,
-  onManualRetryQueue,
-  isRetryingQueue = false,
   onOpenDeviceSetup,
   onOpenMasterAuth,
   onOpenPowerAutomate,
@@ -581,8 +575,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
       />
 
       {/* Top Status Bar: Minimalist Round Indicator & Device Info */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-sm">
-        <div className="flex items-center gap-2">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl px-3.5 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 shadow-sm">
+        <div className="flex items-center gap-2 shrink-0">
           <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">Ronda:</span>
           <span className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border whitespace-nowrap leading-none ${currentRoundDisplay.color}`}>
             {currentRoundDisplay.label}
@@ -590,23 +584,23 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         </div>
 
         {/* Assigned Device / User Number / Operator Tag */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Assigned Device / User Number / Operator Tag (Locked during active count) */}
           {deviceInfo.isUserNumberLocked ? (
             <div
               title="🔒 Usuario y terminal vinculados durante el ciclo. El nombre solo se modificará al pasar al 2do conteo y el usuario al finalizar todos los conteos."
-              className="px-2.5 py-1 bg-slate-950 text-slate-300 rounded-lg text-xs font-medium flex items-center gap-1.5 border border-slate-800 select-none shadow-sm"
+              className="px-2.5 py-1.5 bg-slate-950 text-slate-300 rounded-xl text-xs font-medium flex items-center gap-2 border border-slate-800 select-none shadow-sm"
             >
-              <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 font-bold font-mono text-[11px] flex items-center gap-1">
+              <span className="px-1.5 py-0.5 rounded-md bg-amber-500 text-slate-950 font-bold font-mono text-[11px] flex items-center gap-1 shrink-0">
                 <Lock className="w-2.5 h-2.5" />
                 <span>U{deviceInfo.userNumber}</span>
               </span>
-              <span className="font-bold text-white max-w-[130px] sm:max-w-[200px] truncate">
+              <span className="font-bold text-white whitespace-nowrap">
                 Usuario {deviceInfo.userNumber}
               </span>
               {deviceInfo.operatorName && (
-                <span className="text-slate-400 max-w-[110px] truncate hidden xs:inline">
-                  ({deviceInfo.operatorName})
+                <span className="text-slate-400 font-medium whitespace-nowrap hidden xs:inline">
+                  • {deviceInfo.operatorName}
                 </span>
               )}
             </div>
@@ -614,13 +608,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             <button
               onClick={onOpenCheckIn || onOpenDeviceSetup}
               title="Configurar asignación inicial de terminal"
-              className="px-2.5 py-1 bg-slate-950 hover:bg-slate-800 active:scale-95 text-slate-300 hover:text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all border border-slate-800"
+              className="px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 active:scale-95 text-slate-300 hover:text-white rounded-xl text-xs font-medium flex items-center gap-2 transition-all border border-slate-800 cursor-pointer"
             >
               <Smartphone className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="font-bold text-white max-w-[130px] sm:max-w-[200px] truncate">
+              <span className="font-bold text-white whitespace-nowrap">
                 {deviceInfo.deviceName}
               </span>
-              <span className="text-amber-400 text-[11px] font-semibold">
+              <span className="text-amber-400 text-[11px] font-semibold whitespace-nowrap">
                 (Elegir Usuario)
               </span>
             </button>
@@ -635,15 +629,15 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 ? 'Modo Rápido Activado: Sube a Excel automáticamente en 1.5s (excepto Fila 1 de picking)'
                 : 'Modo Rápido Desactivado: Requiere confirmar antes de subir'
             }
-            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border active:scale-95 ${
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all border active:scale-95 cursor-pointer ${
               autoUploadEnabled
                 ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border-emerald-500/50 shadow-sm'
                 : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border-slate-800'
             }`}
           >
             <span className={autoUploadEnabled ? 'text-emerald-400 animate-pulse' : 'text-slate-500'}>⚡</span>
-            <span className="hidden xs:inline">{autoUploadEnabled ? 'Auto-Subida' : 'Manual'}</span>
-            <span className="font-mono text-[10px] px-1 py-0.2 rounded bg-slate-900/90 text-slate-300 border border-slate-700/60">
+            <span className="hidden xs:inline whitespace-nowrap">{autoUploadEnabled ? 'Auto-Subida' : 'Manual'}</span>
+            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-900/90 text-slate-300 border border-slate-700/60 whitespace-nowrap">
               {autoUploadEnabled ? '1.5s' : 'Off'}
             </span>
           </button>
@@ -651,7 +645,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           {userRole === 'MASTER' && (
             <button
               onClick={onOpenMasterAuth}
-              className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-400 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border border-amber-500/30 whitespace-nowrap"
+              className="px-2.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 active:scale-95 text-amber-400 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all border border-amber-500/30 whitespace-nowrap cursor-pointer"
             >
               <Lock className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">Enlaces (Master)</span>
@@ -663,36 +657,12 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       {/* Upload Feedback Toast */}
       {uploadFeedback && (
-        <div className="bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center justify-between shadow-sm animate-in fade-in leading-snug">
+        <div className="bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-xs sm:text-sm px-4 py-3 rounded-xl flex items-center justify-between shadow-sm animate-in fade-in leading-snug gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="truncate">{uploadFeedback}</span>
+            <span className="break-words">{uploadFeedback}</span>
           </div>
-          <button onClick={() => setUploadFeedback(null)} className="text-slate-400 hover:text-white px-1">✕</button>
-        </div>
-      )}
-
-      {/* POKA-YOKE 4: Offline SharePoint Sync Queue Indicator with Manual Retry */}
-      {pendingSharepointCount > 0 && (
-        <div className="bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs px-3.5 py-2.5 rounded-xl flex items-center justify-between shadow-sm animate-in fade-in gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-amber-400 text-sm shrink-0">{isRetryingQueue ? '🔄' : '⏳'}</span>
-            <div className="truncate text-left">
-              <span className="font-bold text-white">{pendingSharepointCount}</span>{' '}
-              <span>{pendingSharepointCount === 1 ? 'registro pendiente' : 'registros pendientes'} en cola de envío a Excel</span>
-              <span className="text-slate-400 text-[10px] block sm:inline sm:ml-1 font-mono">
-                (auto-reintento silencioso)
-              </span>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => onManualRetryQueue?.()}
-            disabled={isRetryingQueue}
-            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs rounded-lg transition-all shrink-0 ml-1 disabled:opacity-50 flex items-center gap-1 shadow-sm cursor-pointer"
-          >
-            <span>{isRetryingQueue ? 'Subiendo...' : 'Reintentar'}</span>
-          </button>
+          <button onClick={() => setUploadFeedback(null)} className="text-slate-400 hover:text-white px-1 cursor-pointer">✕</button>
         </div>
       )}
 

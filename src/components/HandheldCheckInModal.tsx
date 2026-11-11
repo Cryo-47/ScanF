@@ -132,7 +132,7 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
     };
   };
 
-  const allNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const allNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
   const availableCount = allNumbers.filter((n) => {
     const st = getClaimStatus(n);
     return !st.isTaken || st.isCurrentDevice;
@@ -155,8 +155,8 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
       onConfirmNewRoundName(trimmedName);
     } else {
       // Initial check-in: require user number selection
-      if (!selectedUserNum || selectedUserNum < 1 || selectedUserNum > 10) {
-        setErrorMsg('Por favor selecciona tu número de usuario del 1 al 10.');
+      if (!selectedUserNum || selectedUserNum < 1 || selectedUserNum > 14) {
+        setErrorMsg('Por favor selecciona tu número de usuario del 1 al 14.');
         soundManager.playError();
         return;
       }
@@ -271,7 +271,7 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
             </p>
           </div>
 
-          {/* 2. Número de Usuario del 1 al 10 */}
+          {/* 2. Número de Usuario del 1 al 14 */}
           {isAlreadyLocked && deviceInfo.userNumber ? (
             /* User number is locked to this handheld for the entire cycle */
             <div className="p-4 bg-slate-950 rounded-2xl border-2 border-emerald-500/40 space-y-2">
@@ -294,10 +294,10 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-bold text-slate-200 flex items-center gap-1.5">
                   <Users className="w-4 h-4 text-amber-400" />
-                  <span>Elige tu Número de Usuario (del 1 al 10):</span>
+                  <span>Elige tu Número de Usuario (del 1 al 14):</span>
                 </label>
                 <span className="text-[11px] font-mono text-slate-400">
-                  <strong className="text-emerald-400 font-bold">{availableCount}</strong> de 10 libres
+                  <strong className="text-emerald-400 font-bold">{availableCount}</strong> de 14 libres
                 </span>
               </div>
 
@@ -317,8 +317,8 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
                 </span>
               </div>
 
-              {/* 10-Button Interactive Grid with Real-Time Lock Status */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+              {/* 14-Button Interactive Grid with Real-Time Lock Status */}
+              <div className="grid grid-cols-2 xs:grid-cols-4 sm:grid-cols-7 gap-2 pt-1">
                 {allNumbers.map((num) => {
                   const status = getClaimStatus(num);
                   const isSelected = selectedUserNum === num;
@@ -369,7 +369,7 @@ export const HandheldCheckInModal: React.FC<HandheldCheckInModalProps> = ({
 
                       {/* Operator snippet if blocked */}
                       {isBlocked && (
-                        <span className="text-[9px] font-sans text-slate-400 truncate max-w-[85px] block mt-0.5 leading-none">
+                        <span className="text-[9px] font-sans text-slate-400 block mt-0.5 leading-tight line-clamp-1 break-words px-0.5 text-center">
                           {status.operatorName}
                         </span>
                       )}

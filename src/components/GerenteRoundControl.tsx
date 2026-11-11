@@ -92,7 +92,7 @@ export const GerenteRoundControl: React.FC<GerenteRoundControlProps> = ({
   const usersInRound2: Array<{ userNum: number; name?: string }> = [];
   const usersInRound3: Array<{ userNum: number; name?: string }> = [];
 
-  for (let i = 1; i <= 10; i++) {
+  for (let i = 1; i <= 14; i++) {
     const round = userRounds?.[i] || currentRound || '1ER_CONTEO';
     const dev = deviceSummaries?.find((d) => d.userNumber === i);
     const name = dev?.operatorName || undefined;

@@ -206,96 +206,101 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
         </div>
 
         {/* Action Controls for Gerente / Master */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Online / Inactive count badges */}
-          <div className="flex items-center gap-1.5 text-xs font-mono mr-1">
-            <span className="px-2 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5 font-bold shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 w-full pt-1">
+          {/* Status counts & Quick round filters */}
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+            {/* Online / Inactive count badges */}
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5 font-bold shadow-sm">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
               <span>{onlineCount} En Línea</span>
             </span>
+
             {offlineCount > 0 && (
-              <span className="px-2 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5 font-semibold">
+              <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 flex items-center gap-1.5 font-semibold">
                 <span className="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
                 <span>{offlineCount} Inactivos</span>
               </span>
             )}
-          </div>
 
-          {onClearAllTerminalSessions && (
-            <button
-              onClick={() => setDeleteTarget({ type: 'all' })}
-              className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:border-rose-500/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95"
-              title="Borrar o reiniciar todas las tarjetas de sesiones de terminales en Supabase"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Reiniciar Monitoreo en Vivo</span>
-              <span className="sm:hidden">Reiniciar Monitoreo</span>
-            </button>
-          )}
+            <span className="text-slate-700 hidden sm:inline">|</span>
 
-          {onResetAllDevices && (
-            <button
-              onClick={() => setRebootTarget({ type: 'all' })}
-              className="px-2.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 shadow-sm"
-              title="Forzar a todas las terminales TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden sm:inline">Reiniciar Dispositivos (Re-login)</span>
-              <span className="sm:hidden">Reiniciar Dispositivos</span>
-            </button>
-          )}
-
-          {/* Quick count chips */}
-          <div className="flex items-center gap-1 text-xs font-mono">
-            <button
-              onClick={() => setFilterRound('ALL')}
-              className={`px-2 py-1 rounded-lg border transition-colors ${
-                filterRound === 'ALL'
-                  ? 'bg-slate-800 text-white border-slate-600 font-bold'
-                  : 'text-slate-400 border-slate-800 hover:text-slate-200'
-              }`}
-            >
-              Todos ({devices.length})
-            </button>
-
-            <button
-              onClick={() => setFilterRound('1ER_CONTEO')}
-              className={`px-2 py-1 rounded-lg border flex items-center gap-1 transition-colors ${
-                filterRound === '1ER_CONTEO'
-                  ? 'bg-emerald-950 text-emerald-300 border-emerald-500 font-bold'
-                  : 'text-emerald-400/80 border-emerald-950 hover:bg-emerald-950/40'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span>1er ({round1Count})</span>
-            </button>
-
-            <button
-              onClick={() => setFilterRound('2DO_CONTEO')}
-              className={`px-2 py-1 rounded-lg border flex items-center gap-1 transition-colors ${
-                filterRound === '2DO_CONTEO'
-                  ? 'bg-blue-950 text-blue-300 border-blue-500 font-bold'
-                  : 'text-blue-400/80 border-blue-950 hover:bg-blue-950/40'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-              <span>2do ({round2Count})</span>
-            </button>
-
-            {round3Count > 0 && (
+            {/* Quick Round Filters */}
+            <div className="flex items-center gap-1">
               <button
-                onClick={() => setFilterRound('3ER_CONTEO')}
-                className={`px-2 py-1 rounded-lg border flex items-center gap-1 transition-colors ${
-                  filterRound === '3ER_CONTEO'
-                    ? 'bg-amber-950 text-amber-300 border-amber-500 font-bold'
-                    : 'text-amber-400/80 border-amber-950 hover:bg-amber-950/40'
+                onClick={() => setFilterRound('ALL')}
+                className={`px-2 py-1 rounded-lg border transition-colors ${
+                  filterRound === 'ALL'
+                    ? 'bg-slate-800 text-white border-slate-600 font-bold'
+                    : 'text-slate-400 border-slate-800 hover:text-slate-200'
                 }`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                <span>3er ({round3Count})</span>
+                Todos ({devices.length})
+              </button>
+
+              <button
+                onClick={() => setFilterRound('1ER_CONTEO')}
+                className={`px-2 py-1 rounded-lg border flex items-center gap-1 transition-colors ${
+                  filterRound === '1ER_CONTEO'
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500 font-bold'
+                    : 'text-emerald-400/80 border-emerald-950 hover:bg-emerald-950/40'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>1er ({round1Count})</span>
+              </button>
+
+              <button
+                onClick={() => setFilterRound('2DO_CONTEO')}
+                className={`px-2 py-1 rounded-lg border flex items-center gap-1 transition-colors ${
+                  filterRound === '2DO_CONTEO'
+                    ? 'bg-blue-950 text-blue-300 border-blue-500 font-bold'
+                    : 'text-blue-400/80 border-blue-950 hover:bg-blue-950/40'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                <span>2do ({round2Count})</span>
+              </button>
+
+              {round3Count > 0 && (
+                <button
+                  onClick={() => setFilterRound('3ER_CONTEO')}
+                  className={`px-2 py-1 rounded-lg border flex items-center gap-1 transition-colors ${
+                    filterRound === '3ER_CONTEO'
+                      ? 'bg-amber-950 text-amber-300 border-amber-500 font-bold'
+                      : 'text-amber-400/80 border-amber-950 hover:bg-amber-950/40'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span>3er ({round3Count})</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2">
+            {onClearAllTerminalSessions && (
+              <button
+                onClick={() => setDeleteTarget({ type: 'all' })}
+                className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:border-rose-500/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 whitespace-nowrap"
+                title="Reiniciar a 0 todas las tarjetas de sesiones de terminales en Supabase"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reiniciar Monitoreo</span>
+              </button>
+            )}
+
+            {onResetAllDevices && (
+              <button
+                onClick={() => setRebootTarget({ type: 'all' })}
+                className="px-2.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 shadow-sm whitespace-nowrap"
+                title="Forzar a todas las terminales TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                <span>Reiniciar Dispositivos</span>
               </button>
             )}
           </div>
@@ -304,21 +309,21 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
 
       {/* Feedback Toast */}
       {feedbackToast && (
-        <div className="p-2.5 bg-slate-800/90 border border-slate-700 text-xs text-amber-300 rounded-xl flex items-center justify-between animate-in fade-in">
-          <span>{feedbackToast}</span>
-          <button onClick={() => setFeedbackToast(null)} className="text-slate-400 hover:text-white">
-            <X className="w-3.5 h-3.5" />
+        <div className="p-3 bg-slate-800/90 border border-slate-700 text-xs text-amber-300 rounded-xl flex items-center justify-between animate-in fade-in">
+          <span className="font-medium">{feedbackToast}</span>
+          <button onClick={() => setFeedbackToast(null)} className="text-slate-400 hover:text-white p-1">
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
       {/* Device Cards Grid */}
       {filteredDevices.length === 0 ? (
-        <div className="py-6 text-center text-slate-500 text-xs">
+        <div className="py-8 text-center text-slate-500 text-xs font-mono">
           No hay terminales activas en este momento. Las handhelds aparecerán automáticamente al escanear o registrarse.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {filteredDevices.map((dev) => {
             const badge = getRoundBadge(dev.currentRound);
             const isOnline = isDeviceOnline(dev);
@@ -326,36 +331,22 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
             return (
               <div
                 key={dev.deviceId || dev.deviceName}
-                className={`bg-slate-950 border rounded-xl p-3.5 space-y-2.5 transition-all relative group ${
+                className={`bg-slate-950 border rounded-2xl p-4 space-y-3 transition-all relative group ${
                   isOnline 
-                    ? 'border-emerald-500/40 shadow-sm shadow-emerald-500/10' 
-                    : 'border-slate-800 hover:border-slate-700 opacity-90'
+                    ? 'border-emerald-500/40 shadow-md shadow-emerald-950/20' 
+                    : 'border-slate-800/80 hover:border-slate-700 opacity-95'
                 }`}
               >
-                {/* Device Title & Current Round Badge */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    {/* Número de Usuario Destacado */}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black font-mono text-xs flex items-center gap-1.5 shadow-sm shadow-amber-500/20 leading-none">
-                        <User className="w-3.5 h-3.5 stroke-[2.5]" />
-                        <span>{dev.userNumber ? `Usuario ${dev.userNumber}` : 'Usuario sin asignar'}</span>
-                      </span>
+                {/* Row 1: Top Bar with User Identity & Status + Action Buttons (Spacious, Never Overlapping) */}
+                <div className="flex items-center justify-between gap-2 border-b border-slate-900 pb-2.5">
+                  {/* User Number Badge */}
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-black font-mono text-xs flex items-center gap-1.5 shadow-sm shadow-amber-500/20 shrink-0 select-none">
+                    <User className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>{dev.userNumber ? `Usuario ${dev.userNumber}` : 'Sin Asignar'}</span>
+                  </span>
 
-                      <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
-                        <Smartphone className="w-3 h-3 text-slate-500 shrink-0" />
-                        <span className="truncate max-w-[120px]">{dev.deviceName}</span>
-                      </span>
-                    </div>
-
-                    {/* Nombre del Operador */}
-                    <div className="text-xs text-slate-300 font-medium truncate flex items-center gap-1 mt-1.5">
-                      <span className="text-[11px] text-slate-500 font-normal">Operador:</span>
-                      <strong className="text-white truncate">{dev.operatorName || 'Sin asignar'}</strong>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                  {/* Status & Actions */}
+                  <div className="flex items-center gap-1.5 shrink-0">
                     {/* Online / Inactivo Indicator */}
                     {isOnline ? (
                       <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5 shadow-sm shadow-emerald-500/10">
@@ -372,31 +363,25 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
                       </span>
                     )}
 
-                    {/* High visibility round indicator */}
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border flex items-center gap-1 ${badge.badgeClass}`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${badge.dotClass}`} />
-                      <span>{badge.label}</span>
-                    </span>
-
-                    {/* Force Re-login button per device */}
+                    {/* Force Re-login button */}
                     {onResetSingleDevice && (
                       <button
+                        type="button"
                         onClick={() => setRebootTarget({ type: 'single', device: dev })}
                         title={`Cerrar sesión de ${dev.userNumber ? `Usuario ${dev.userNumber}` : dev.deviceName} y pedir nombre y usuario en 1er conteo`}
-                        className="opacity-70 group-hover:opacity-100 p-1 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded transition-all"
+                        className="p-1 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 rounded-md transition-all border border-slate-800 hover:border-amber-500/30 active:scale-90"
                       >
                         <RotateCcw className="w-3.5 h-3.5" />
                       </button>
                     )}
 
-                    {/* Delete button per device */}
+                    {/* Delete button */}
                     {onDeleteTerminalSession && (
                       <button
+                        type="button"
                         onClick={() => setDeleteTarget({ type: 'single', device: dev })}
-                        title={`Eliminar datos y sesión de ${dev.userNumber ? `Usuario ${dev.userNumber}` : dev.deviceName}`}
-                        className="opacity-70 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition-all"
+                        title={`Eliminar sesión de ${dev.userNumber ? `Usuario ${dev.userNumber}` : dev.deviceName}`}
+                        className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-md transition-all border border-slate-800 hover:border-rose-500/30 active:scale-90"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -404,41 +389,65 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
                   </div>
                 </div>
 
-                {/* Metrics */}
-                <div className="pt-2 border-t border-slate-900 grid grid-cols-2 gap-2 text-xs">
-                  <div className="bg-slate-900/60 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block">Piezas Contadas:</span>
-                    <span className="text-sm font-mono font-bold text-amber-400">
+                {/* Row 2: Device & Round Badge (Full Width, Never Overlapping) */}
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-300 font-medium min-w-0">
+                    <Smartphone className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="font-bold text-white break-words">
+                      {dev.deviceName || 'Zebra TC26'}
+                    </span>
+                  </div>
+
+                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border flex items-center gap-1 shrink-0 ${badge.badgeClass}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${badge.dotClass}`} />
+                    <span>{badge.label}</span>
+                  </span>
+                </div>
+
+                {/* Row 3: Operator Name (Full Display, No Awkward "O|" Cut-offs) */}
+                <div className="text-xs bg-slate-900/60 p-2 rounded-xl border border-slate-800/80 space-y-0.5">
+                  <span className="text-[10px] text-slate-400 block font-medium">Operador Asignado:</span>
+                  <div className="text-slate-100 font-bold break-words leading-snug">
+                    {dev.operatorName && dev.operatorName.trim() ? dev.operatorName : (dev.userNumber ? `Usuario ${dev.userNumber}` : 'Sin asignar')}
+                  </div>
+                </div>
+
+                {/* Row 4: Metrics (Spacious 2-column Grid) */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-medium block">Piezas Contadas:</span>
+                    <span className="text-base font-mono font-extrabold text-amber-400 block mt-0.5">
                       {dev.totalPieces.toLocaleString()}
                     </span>
                   </div>
 
-                  <div className="bg-slate-900/60 p-2 rounded-lg border border-slate-800/80">
-                    <span className="text-[10px] text-slate-400 block">Códigos QR:</span>
-                    <span className="text-sm font-mono font-bold text-slate-200">
-                      {dev.totalScans} escaneos
+                  <div className="bg-slate-900/80 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-[10px] text-slate-400 font-medium block">Códigos QR:</span>
+                    <span className="text-base font-mono font-extrabold text-slate-200 block mt-0.5">
+                      {dev.totalScans} <span className="text-xs font-normal text-slate-400">escaneos</span>
                     </span>
                   </div>
                 </div>
 
-                {/* Status & Last Active info */}
-                <div className="flex items-center justify-between text-[11px] font-mono pt-1 border-t border-slate-900">
-                  <span className="flex items-center gap-1.5">
-                    <Clock className="w-3 h-3 text-slate-500 shrink-0" />
+                {/* Row 5: Status & Last Activity Info (Comfortable spacing, no clipping) */}
+                <div className="flex items-center justify-between gap-2 text-[11px] font-mono pt-1 border-t border-slate-900 text-slate-400">
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                     {isOnline ? (
                       <span className="text-emerald-400 font-semibold text-[10px] flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                        <span>En la app ahora ({formatTimeAgo(dev.lastActive)})</span>
+                        <span>En vivo ({formatTimeAgo(dev.lastActive)})</span>
                       </span>
                     ) : (
-                      <span className="text-slate-500 text-[10px]">
-                        {formatTimeAgo(dev.lastActive)} <span className="text-slate-600">(Apagada o cerrada)</span>
+                      <span className="text-slate-400 text-[10px]">
+                        {formatTimeAgo(dev.lastActive)} <span className="text-slate-500 font-sans">(Cerrada)</span>
                       </span>
                     )}
                   </span>
+
                   {dev.lastLocator && (
-                    <span className="text-slate-300 font-semibold truncate max-w-[120px] text-[10px] bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
-                      Loc: <span className="text-emerald-400">{dev.lastLocator}</span>
+                    <span className="text-slate-300 font-semibold text-[10px] bg-slate-900 px-2 py-0.5 rounded-md border border-slate-800 shrink-0">
+                      Loc: <span className="text-emerald-400 font-mono font-bold">{dev.lastLocator}</span>
                     </span>
                   )}
                 </div>

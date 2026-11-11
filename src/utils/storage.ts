@@ -299,6 +299,10 @@ export function loadRound2Authorizations(): Record<number, boolean> {
     8: true,
     9: true,
     10: true,
+    11: true,
+    12: true,
+    13: true,
+    14: true,
   };
   if (typeof window === 'undefined') return defaults;
   try {
@@ -333,6 +337,10 @@ export function loadUserRounds(): Record<number, CountRound> {
     8: '1ER_CONTEO',
     9: '1ER_CONTEO',
     10: '1ER_CONTEO',
+    11: '1ER_CONTEO',
+    12: '1ER_CONTEO',
+    13: '1ER_CONTEO',
+    14: '1ER_CONTEO',
   };
   if (typeof window === 'undefined') return defaults;
   try {
