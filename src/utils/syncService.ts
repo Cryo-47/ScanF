@@ -1,6 +1,33 @@
 import { ScannedItem, PowerAutomateConfig, SupabaseConfig, DeviceInfo, DeviceStatusSummary, CountRound } from '../types/inventory';
 import { isValidUUID, generateUUID, normalizeRound } from './storage';
-import { canonicalizeLocator } from './qrParser';
+import { canonicalizeLocator, normalizeLocator } from './qrParser';
+
+// Idempotency guards to guarantee Power Automate is never invoked twice for the same scan or round+locator
+const dispatchedWebhookIds = new Set<string>();
+const dispatchedWebhookLocatorRounds = new Map<string, number>();
+
+function buildLocatorRoundKey(round: CountRound | string | undefined, localizador: string | undefined): string {
+  const normRound = normalizeRound(round);
+  const canon = canonicalizeLocator(localizador) || normalizeLocator(localizador);
+  return canon ? `${normRound}::${canon}` : '';
+}
+
+export function clearWebhookIdempotencyGuard(scanId?: string, round?: CountRound | string, localizador?: string): void {
+  if (!scanId && !round && !localizador) {
+    dispatchedWebhookIds.clear();
+    dispatchedWebhookLocatorRounds.clear();
+    return;
+  }
+  if (scanId) {
+    dispatchedWebhookIds.delete(scanId);
+  }
+  if (round && localizador) {
+    const key = buildLocatorRoundKey(round, localizador);
+    if (key) {
+      dispatchedWebhookLocatorRounds.delete(key);
+    }
+  }
+}
 
 export interface SyncResult {
   sharepointState: 'synced' | 'pending' | 'failed' | 'simulated';
@@ -144,8 +171,8 @@ export async function fetchTerminalSessions(
 }
 
 /**
- * Delete a specific terminal session from Supabase (by deviceId or userNumber)
- * Broadcasts status='reset' with 0 counts before deleting so active handhelds immediately wipe local scans
+ * Delete a specific terminal session from Supabase live monitoring table ONLY
+ * (does not delete scans or force operator logout)
  */
 export async function deleteTerminalSession(
   deviceIdOrUser: string,
@@ -163,25 +190,6 @@ export async function deleteTerminalSession(
   const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?${filter}`;
 
   try {
-    // 1. Mark as reset with 0s so handhelds immediately clear local scans even before deletion
-    await fetch(endpoint, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': supabaseConfig.anonKey.trim(),
-        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
-      },
-      body: JSON.stringify({
-        status: 'reset',
-        total_scans: 0,
-        total_piezas: 0,
-        last_sku: null,
-        last_locator: null,
-        updated_at: new Date().toISOString(),
-      }),
-    }).catch(() => {});
-
-    // 2. Perform deletion
     const res = await fetch(endpoint, {
       method: 'DELETE',
       headers: {
@@ -197,8 +205,8 @@ export async function deleteTerminalSession(
 }
 
 /**
- * Clear all live terminal sessions from Supabase (resets live monitoring to 0)
- * Broadcasts status='reset' with 0 counts to all handhelds so they wipe local scans and restart at zero
+ * Clear all live terminal sessions from Supabase monitoring board ONLY
+ * (does not wipe scans or force operator re-login)
  */
 export async function clearAllTerminalSessions(
   supabaseConfig?: SupabaseConfig
@@ -210,25 +218,6 @@ export async function clearAllTerminalSessions(
   const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?device_id=not.is.null`;
 
   try {
-    // 1. Mark all as reset with 0s so any connected handheld wipes local scans
-    await fetch(endpoint, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': supabaseConfig.anonKey.trim(),
-        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
-      },
-      body: JSON.stringify({
-        status: 'reset',
-        total_scans: 0,
-        total_piezas: 0,
-        last_sku: null,
-        last_locator: null,
-        updated_at: new Date().toISOString(),
-      }),
-    }).catch(() => {});
-
-    // 2. Perform deletion
     const res = await fetch(endpoint, {
       method: 'DELETE',
       headers: {
@@ -294,31 +283,45 @@ export async function pushScanToSupabase(
 }
 
 /**
- * Fetch all scans stored in Supabase cloud so Gerente and handhelds stay completely synchronized
+ * Fetch all scans stored in Supabase cloud so Gerente and handhelds stay completely synchronized.
+ * Paginates past Supabase PostgREST's 1,000-row cap and returns null on network/HTTP errors
+ * so callers never wipe local cache during brief Wi-Fi drops.
  */
 export async function fetchCloudScans(
   supabaseConfig?: SupabaseConfig
-): Promise<ScannedItem[]> {
+): Promise<ScannedItem[] | null> {
   if (!supabaseConfig?.isEnabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
-    return [];
+    return null;
   }
 
-  const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?select=*&order=fecha_hora.desc&limit=10000`;
+  const baseEndpoint = getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans');
+  const PAGE_SIZE = 1000;
+  const MAX_PAGES = 20; // Up to 20,000 rows safely
+  const allRows: Record<string, unknown>[] = [];
 
   try {
-    const res = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        'apikey': supabaseConfig.anonKey.trim(),
-        'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
-      },
-    });
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const offset = page * PAGE_SIZE;
+      const endpoint = `${baseEndpoint}?select=*&order=fecha_hora.desc&limit=${PAGE_SIZE}&offset=${offset}`;
+      const res = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          'apikey': supabaseConfig.anonKey.trim(),
+          'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+        },
+      });
 
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!Array.isArray(data)) return [];
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!Array.isArray(data)) return null;
 
-    return data.map((row: Record<string, unknown>) => ({
+      allRows.push(...data);
+      if (data.length < PAGE_SIZE) {
+        break;
+      }
+    }
+
+    return allRows.map((row: Record<string, unknown>) => ({
       id: String(row.id || generateUUID()),
       sku: String(row.sku || ''),
       cantidad: Number(row.cantidad || 0),
@@ -334,7 +337,7 @@ export async function fetchCloudScans(
       syncStateSharepoint: (row.sync_state_sharepoint as any) || 'synced',
     }));
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -364,15 +367,20 @@ export async function checkCloudDuplicateLocalizador(
   const humanRound = roundMap[normRound] || normRound;
 
   const canonLoc = canonicalizeLocator(cleanLoc);
-  const locFilter = canonLoc && canonLoc !== cleanLoc
-    ? `or=(localizador.ilike.${encodeURIComponent(cleanLoc)},localizador.ilike.${encodeURIComponent(canonLoc)})`
-    : `localizador=ilike.${encodeURIComponent(cleanLoc)}`;
+  const normLoc = normalizeLocator(cleanLoc);
+  const locVariants = Array.from(new Set([cleanLoc, canonLoc, normLoc].filter(Boolean)));
+
+  const locOrClause = locVariants
+    .map((v) => `localizador.ilike.${encodeURIComponent(v)}`)
+    .join(',');
+  const roundOrClause = `ronda_conteo.eq.${encodeURIComponent(normRound)},ronda_conteo.eq.${encodeURIComponent(humanRound)}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 1500);
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
 
   try {
-    const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?${locFilter}&or=(ronda_conteo.eq.${encodeURIComponent(normRound)},ronda_conteo.eq.${encodeURIComponent(humanRound)})&select=id,sku,localizador,ronda_conteo,fecha_hora,operador&limit=1`;
+    // Wrap both OR conditions inside a single top-level and=(...) so PostgREST evaluates both properly
+    const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'inventory_scans')}?and=(or(${locOrClause}),or(${roundOrClause}))&select=id,sku,localizador,ronda_conteo,fecha_hora,operador&limit=1`;
 
     const res = await fetch(endpoint, {
       method: 'GET',
@@ -387,7 +395,7 @@ export async function checkCloudDuplicateLocalizador(
     const data = await res.json();
     if (Array.isArray(data) && data.length > 0) {
       const match = data[0];
-      const prevTime = match.fecha_hora 
+      const prevTime = match.fecha_hora
         ? new Date(match.fecha_hora).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : 'recientemente';
       return {
@@ -714,8 +722,22 @@ export async function syncScannedItem(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 25000);
 
+  const locRoundKey = buildLocatorRoundKey(item.conteoRound, item.localizador);
+
   const sharepointPromise = (async () => {
     if (powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl) {
+      // Idempotency check: prevent duplicate Power Automate POSTs for the same scan ID or round+locator
+      if (dispatchedWebhookIds.has(item.id) || (locRoundKey && dispatchedWebhookLocatorRounds.has(locRoundKey))) {
+        sharepointState = 'synced';
+        return;
+      }
+
+      // Register synchronously before awaiting fetch
+      dispatchedWebhookIds.add(item.id);
+      if (locRoundKey) {
+        dispatchedWebhookLocatorRounds.set(locRoundKey, Date.now());
+      }
+
       try {
         const payload = buildPowerAutomatePayload(item);
         const res = await fetch(powerAutomateConfig.webhookUrl, {

@@ -237,7 +237,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         totalScans={scans.length}
         userRounds={userRounds}
         deviceSummaries={deviceSummaries}
-        onOpenDeleteAllScans={() => setConfirmDeleteModal({ type: 'all' })}
       />
 
       {/* EXCLUSIVO GERENTE: Asignación y Avance Individual al 2do Conteo */}
@@ -251,7 +250,6 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         onSetAllUsers={onSetAllUsersRound2}
         scans={scans}
         deviceSummaries={deviceSummaries}
-        onResetAllDevices={onResetAllDevices}
         onResetUserDevice={onResetUserDevice}
       />
 
@@ -401,19 +399,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <span className="sm:hidden">Descargar Excel (.CSV)</span>
           </button>
 
-          {/* BOTÓN: Reiniciar todas las terminales TC26 (pedir nombre y usuario en 1er conteo) */}
-          {(userRole === 'GERENTE' || userRole === 'MASTER') && onResetAllDevices && (
-            <button
-              onClick={onResetAllDevices}
-              className="px-3.5 py-2 bg-amber-950/80 hover:bg-amber-900 text-amber-200 hover:text-white border border-amber-500/60 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 whitespace-nowrap cursor-pointer"
-              title="Forzar a todas las handhelds TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>Reiniciar Dispositivos</span>
-            </button>
-          )}
-
-          {/* BOTÓN: Eliminar datos de los QR escaneados en Supabase */}
+          {/* BOTÓN ÚNICO: Eliminar datos de los QR escaneados en Supabase (con modal de confirmación obligatorio) */}
           {(userRole === 'GERENTE' || userRole === 'MASTER') && (
             <button
               onClick={() => setConfirmDeleteModal({ type: 'all' })}

@@ -9,10 +9,12 @@ import {
   Sparkles,
   AlertCircle,
   Clock,
-  ArrowUpRight
+  ArrowUpRight,
+  X
 } from 'lucide-react';
 import { CountRound, ScannedItem, DeviceStatusSummary } from '../types/inventory';
 import { soundManager } from '../utils/audioHaptics';
+import { normalizeRound } from '../utils/storage';
 
 interface GerenteUserAssignmentPanelProps {
   currentRound: CountRound;
@@ -25,7 +27,6 @@ interface GerenteUserAssignmentPanelProps {
   onToggleUser?: (userNumber: number) => void;
   onSetAllUsers?: (enabled: boolean) => void;
   onResetUserDevice?: (userNumber: number) => void;
-  onResetAllDevices?: () => void;
 }
 
 export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProps> = ({
@@ -36,10 +37,10 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
   scans,
   deviceSummaries,
   onResetUserDevice,
-  onResetAllDevices,
 }) => {
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   const [filterRound, setFilterRound] = useState<CountRound | 'ALL'>('ALL');
+  const [confirmResetUserNum, setConfirmResetUserNum] = useState<number | null>(null);
 
   const showFeedback = (msg: string) => {
     setFeedbackMsg(msg);
@@ -55,9 +56,9 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
     const userScans = scans.filter(
       (s) => s.userNumber === userNum || s.operador === userLabel
     );
-    const round1Scans = userScans.filter((s) => s.conteoRound === '1ER_CONTEO');
-    const round2Scans = userScans.filter((s) => s.conteoRound === '2DO_CONTEO');
-    const round3Scans = userScans.filter((s) => s.conteoRound === '3ER_CONTEO');
+    const round1Scans = userScans.filter((s) => normalizeRound(s.conteoRound) === '1ER_CONTEO');
+    const round2Scans = userScans.filter((s) => normalizeRound(s.conteoRound) === '2DO_CONTEO');
+    const round3Scans = userScans.filter((s) => normalizeRound(s.conteoRound) === '3ER_CONTEO');
     
     const round1Pieces = round1Scans.reduce((sum, s) => sum + s.cantidad, 0);
     const round2Pieces = round2Scans.reduce((sum, s) => sum + s.cantidad, 0);
@@ -141,11 +142,14 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
               <h3 className="text-base font-bold text-white tracking-tight">
                 Asignación de Usuarios para el 2do Conteo
               </h3>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                {inRound1Count} en 1er Conteo
+              </span>
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                 {inRound2Count} en 2do Conteo
               </span>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                {inRound1Count} en 1er Conteo
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                {inRound3Count} en 3er Conteo
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -171,16 +175,6 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
           >
             Reiniciar Todos a 1er Conteo
           </button>
-          {onResetAllDevices && (
-            <button
-              onClick={onResetAllDevices}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/40 hover:border-rose-400 transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
-              title="Forzar a todas las handhelds TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-              <span>Reiniciar Dispositivos (Re-login)</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -322,21 +316,40 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                     </div>
                   </div>
 
-                  {/* Stats 1er vs 2do Conteo (Comfortable 2-column cards) */}
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/80">
-                      <span className="text-slate-400 block text-[10px] font-sans">1er Conteo:</span>
-                      <span className="text-emerald-400 font-bold text-sm block mt-0.5">
-                        {u.round1Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
-                      </span>
-                      <span className="text-slate-500 block text-[10px] mt-0.5">{u.round1ScansCount} escaneos</span>
+                  {/* Stats 1er, 2do y 3er Conteo */}
+                  <div className="space-y-2 text-xs font-mono">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/80">
+                        <span className="text-slate-400 block text-[10px] font-sans">1er Conteo:</span>
+                        <span className="text-emerald-400 font-bold text-sm block mt-0.5">
+                          {u.round1Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
+                        </span>
+                        <span className="text-slate-500 block text-[10px] mt-0.5">{u.round1ScansCount} escaneos</span>
+                      </div>
+                      <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/80">
+                        <span className="text-slate-400 block text-[10px] font-sans">2do Conteo:</span>
+                        <span className="text-blue-400 font-bold text-sm block mt-0.5">
+                          {u.round2Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
+                        </span>
+                        <span className="text-slate-500 block text-[10px] mt-0.5">{u.round2ScansCount} escaneos</span>
+                      </div>
                     </div>
-                    <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/80">
-                      <span className="text-slate-400 block text-[10px] font-sans">2do Conteo:</span>
-                      <span className="text-blue-400 font-bold text-sm block mt-0.5">
-                        {u.round2Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
-                      </span>
-                      <span className="text-slate-500 block text-[10px] mt-0.5">{u.round2ScansCount} escaneos</span>
+
+                    <div
+                      className={`px-2.5 py-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
+                        isRound3 || u.round3ScansCount > 0
+                          ? 'bg-amber-950/35 border-amber-500/40'
+                          : 'bg-slate-900/60 border-slate-800/70'
+                      }`}
+                    >
+                      <span className="text-[10px] font-sans text-slate-400 whitespace-nowrap">3er Conteo:</span>
+                      <div className="flex items-center gap-1.5 whitespace-nowrap">
+                        <span className="text-amber-400 font-bold text-xs">
+                          {u.round3Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
+                        </span>
+                        <span className="text-slate-600">•</span>
+                        <span className="text-slate-400 text-[10px]">{u.round3ScansCount} escaneos</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -414,15 +427,11 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                     </div>
                   )}
 
-                  {/* Botón para forzar Re-login individual de este usuario */}
+                  {/* Botón para forzar Re-login individual de este usuario (con confirmación Poka-Yoke) */}
                   {onResetUserDevice && (
                     <button
                       type="button"
-                      onClick={() => {
-                        soundManager.playWarning();
-                        onResetUserDevice(u.userNum);
-                        showFeedback(`⚡ Se envió orden de re-login a ${u.userLabel}. Su terminal pedirá nombre y usuario.`);
-                      }}
+                      onClick={() => setConfirmResetUserNum(u.userNum)}
                       className="w-full px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/30 flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer"
                       title={`Cerrar sesión remota de ${u.userLabel} y obligar a pedir nombre y usuario de nuevo en 1er conteo`}
                     >
@@ -435,6 +444,61 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
             );
           })}
       </div>
+
+      {/* Modal de confirmación Poka-Yoke para Re-login individual */}
+      {confirmResetUserNum !== null && onResetUserDevice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-100">
+          <div className="bg-slate-900 border-2 border-amber-500 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative">
+            <button
+              type="button"
+              onClick={() => setConfirmResetUserNum(null)}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
+                  ¿Forzar re-login de Usuario {confirmResetUserNum}?
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  La terminal asignada al <strong>Usuario {confirmResetUserNum}</strong> cerrará su sesión actual, volverá al 1er Conteo y pedirá nombre y número de usuario nuevamente.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = confirmResetUserNum;
+                  setConfirmResetUserNum(null);
+                  soundManager.playWarning();
+                  onResetUserDevice(target);
+                  showFeedback(`⚡ Se envió orden de re-login a Usuario ${target}. Su terminal pedirá nombre y usuario.`);
+                }}
+                className="min-h-[44px] px-4 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                autoFocus
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Sí, Forzar Re-login</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setConfirmResetUserNum(null)}
+                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

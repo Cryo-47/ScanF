@@ -133,10 +133,10 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
           const ok = await onClearAllTerminalSessions();
           if (ok) {
             soundManager.playSuccess();
-            setFeedbackToast('Sesiones en vivo reiniciadas a 0 en Supabase');
+            setFeedbackToast('✓ Tablero de monitoreo limpiado. Los escaneos y sesiones activas permanecen intactos.');
           } else {
             soundManager.playError();
-            setFeedbackToast('Error al reiniciar sesiones en Supabase');
+            setFeedbackToast('Error al limpiar el monitoreo en Supabase');
           }
         }
       } else {
@@ -145,10 +145,10 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
           const ok = await onDeleteTerminalSession(targetId);
           if (ok) {
             soundManager.playSuccess();
-            setFeedbackToast(`Sesión de ${deleteTarget.device.deviceName} eliminada`);
+            setFeedbackToast(`✓ Tarjeta de ${deleteTarget.device.deviceName} retirada del monitoreo (sin afectar escaneos).`);
           } else {
             soundManager.playError();
-            setFeedbackToast('Error al eliminar sesión de la terminal');
+            setFeedbackToast('Error al retirar tarjeta del monitoreo');
           }
         }
       }
@@ -280,27 +280,27 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Action Buttons: Clearly separated visually and functionally */}
           <div className="flex flex-wrap items-center gap-2">
             {onClearAllTerminalSessions && (
               <button
                 onClick={() => setDeleteTarget({ type: 'all' })}
-                className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:border-rose-500/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 whitespace-nowrap"
-                title="Reiniciar a 0 todas las tarjetas de sesiones de terminales en Supabase"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600/80 hover:border-slate-500 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 whitespace-nowrap cursor-pointer"
+                title="Solo limpia las tarjetas visuales del tablero en vivo (no borra escaneos ni cierra sesión en las handhelds)"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reiniciar Monitoreo</span>
+                <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                <span>Limpiar Monitoreo</span>
               </button>
             )}
 
             {onResetAllDevices && (
               <button
                 onClick={() => setRebootTarget({ type: 'all' })}
-                className="px-2.5 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 shadow-sm whitespace-nowrap"
-                title="Forzar a todas las terminales TC26 a cerrar sesión, volver al 1er conteo y pedir nombre y usuario de nuevo"
+                className="px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/50 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 shadow-sm whitespace-nowrap cursor-pointer"
+                title="Cierra la sesión remota en todas las handhelds TC26, las regresa al 1er conteo y pide nombre y usuario de nuevo"
               >
                 <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-                <span>Reiniciar Dispositivos</span>
+                <span>Forzar Re-login de Handhelds</span>
               </button>
             )}
           </div>
@@ -375,13 +375,13 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
                       </button>
                     )}
 
-                    {/* Delete button */}
+                    {/* Delete card from monitoring button */}
                     {onDeleteTerminalSession && (
                       <button
                         type="button"
                         onClick={() => setDeleteTarget({ type: 'single', device: dev })}
-                        title={`Eliminar sesión de ${dev.userNumber ? `Usuario ${dev.userNumber}` : dev.deviceName}`}
-                        className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-md transition-all border border-slate-800 hover:border-rose-500/30 active:scale-90"
+                        title={`Quitar tarjeta de ${dev.userNumber ? `Usuario ${dev.userNumber}` : dev.deviceName} del tablero (no borra escaneos)`}
+                        className="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-md transition-all border border-slate-800 hover:border-rose-500/30 active:scale-90 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -457,32 +457,35 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
         </div>
       )}
 
-      {/* MODAL DE CONFIRMACIÓN DE ELIMINACIÓN DE TERMINALES */}
+      {/* MODAL DE CONFIRMACIÓN DE LIMPIEZA DEL TABLERO DE MONITOREO (SOLO VISUAL) */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-100">
-          <div className="bg-slate-900 border-2 border-rose-500/80 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative">
+          <div className="bg-slate-900 border-2 border-slate-600 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative">
             <button
               onClick={() => !isDeleting && setDeleteTarget(null)}
               disabled={isDeleting}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors"
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
 
             <div className="flex items-start gap-3">
-              <div className="w-12 h-12 rounded-xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
-                <AlertTriangle className="w-6 h-6" />
+              <div className="w-12 h-12 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 shrink-0">
+                <Trash2 className="w-6 h-6" />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[10px] font-bold inline-block">
+                  SOLO TABLERO VISUAL • NO BORRA ESCANEOS
+                </span>
                 <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                   {deleteTarget.type === 'all'
-                    ? '¿Reiniciar todas las sesiones de terminales?'
-                    : `¿Eliminar datos de ${deleteTarget.device.userNumber ? `Usuario ${deleteTarget.device.userNumber}` : deleteTarget.device.deviceName}?`}
+                    ? '¿Limpiar todas las tarjetas del monitoreo?'
+                    : `¿Quitar tarjeta de ${deleteTarget.device.userNumber ? `Usuario ${deleteTarget.device.userNumber}` : deleteTarget.device.deviceName}?`}
                 </h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
+                <p className="text-xs text-slate-300 leading-relaxed">
                   {deleteTarget.type === 'all'
-                    ? 'Se borrarán de Supabase los registros de monitoreo en vivo de todas las terminales TC26 para comenzar con contadores en cero.'
-                    : `Se eliminarán los registros de monitoreo en vivo de esta terminal (${deleteTarget.device.operatorName}) en Supabase.`}
+                    ? 'Retira las tarjetas viejas o inactivas de este panel. No borra datos de Excel/Supabase ni cierra la sesión de los operadores conectados (volverán a mostrarse automáticamente en su siguiente latido).'
+                    : `Solo retira la tarjeta de monitoreo de ${deleteTarget.device.operatorName}. Sus escaneos y su sesión en la terminal continúan intactos.`}
                 </p>
               </div>
             </div>
@@ -491,17 +494,17 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
               <button
                 onClick={handleConfirmDelete}
                 disabled={isDeleting}
-                className="min-h-[44px] px-4 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+                className="min-h-[44px] px-4 bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 {isDeleting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Borrando...</span>
+                    <span>Limpiando...</span>
                   </>
                 ) : (
                   <>
                     <Check className="w-4 h-4" />
-                    <span>Sí, Eliminar</span>
+                    <span>Sí, Limpiar Vista</span>
                   </>
                 )}
               </button>
@@ -509,7 +512,7 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
               <button
                 onClick={() => setDeleteTarget(null)}
                 disabled={isDeleting}
-                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all"
+                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all cursor-pointer"
               >
                 Cancelar
               </button>
@@ -518,14 +521,14 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
         </div>
       )}
 
-      {/* MODAL DE CONFIRMACIÓN DE REINICIO DE TERMINALES (FORZAR RE-LOGIN Y 1ER CONTEO) */}
+      {/* MODAL DE CONFIRMACIÓN DE FORZAR RE-LOGIN EN HANDHELDS */}
       {rebootTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-100">
           <div className="bg-slate-900 border-2 border-amber-500 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative">
             <button
               onClick={() => !isRebooting && setRebootTarget(null)}
               disabled={isRebooting}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors"
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -534,15 +537,18 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
               <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
                 <RotateCcw className="w-6 h-6" />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
+                <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono text-[10px] font-bold inline-block">
+                  ACCIÓN REMOTA EN HANDHELDS TC26
+                </span>
                 <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                   {rebootTarget.type === 'all'
-                    ? '¿Reiniciar todas las terminales TC26?'
-                    : `¿Cerrar sesión de ${rebootTarget.device.userNumber ? `Usuario ${rebootTarget.device.userNumber}` : rebootTarget.device.deviceName}?`}
+                    ? '¿Forzar Re-login en todas las handhelds?'
+                    : `¿Cerrar sesión remota de ${rebootTarget.device.userNumber ? `Usuario ${rebootTarget.device.userNumber}` : rebootTarget.device.deviceName}?`}
                 </h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
+                <p className="text-xs text-slate-300 leading-relaxed">
                   {rebootTarget.type === 'all'
-                    ? 'Se enviará la orden remota a todas las handhelds para cerrar su sesión actual, regresar al 1er conteo y abrir la pantalla de inicio para que cada operador elija su nombre y usuario nuevamente.'
+                    ? 'Todas las terminales TC26 cerrarán su sesión actual, regresarán al 1er Conteo y abrirán la pantalla inicial para pedir nombre completo y número de usuario (1 al 14) de nuevo.'
                     : `La terminal de ${rebootTarget.device.operatorName} cerrará su sesión, regresará a 1er Conteo y pedirá nombre y selección de usuario nuevamente.`}
                 </p>
               </div>
@@ -552,7 +558,7 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
               <button
                 onClick={handleConfirmReboot}
                 disabled={isRebooting}
-                className="min-h-[44px] px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50"
+                className="min-h-[44px] px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 {isRebooting ? (
                   <>
@@ -570,7 +576,7 @@ export const DeviceMonitoringPanel: React.FC<DeviceMonitoringPanelProps> = ({
               <button
                 onClick={() => setRebootTarget(null)}
                 disabled={isRebooting}
-                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all"
+                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all cursor-pointer"
               >
                 Cancelar
               </button>

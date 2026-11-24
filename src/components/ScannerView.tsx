@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { CountRound, ScannedItem, PowerAutomateConfig, SupabaseConfig, UserRole, DeviceInfo } from '../types/inventory';
-import { parseInventoryQr, isPickingFila1, canonicalizeLocator } from '../utils/qrParser';
+import { parseInventoryQr, isPickingFila1, canonicalizeLocator, normalizeLocator } from '../utils/qrParser';
 import { soundManager } from '../utils/audioHaptics';
 import { normalizeRound, generateUUID, loadAutoUploadMode, saveAutoUploadMode } from '../utils/storage';
 import { checkCloudDuplicateLocalizador } from '../utils/syncService';
@@ -85,9 +85,26 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     round?: string;
   } | null>(null);
 
+  // Industrial Error / Status Modal (replaces native browser alert())
+  const [scanAlertModal, setScanAlertModal] = useState<{
+    type: 'error' | 'finalized';
+    badge: string;
+    title: string;
+    message: string;
+    rawSample?: string;
+  } | null>(null);
+  const alertModalOpenedAtRef = useRef<number>(0);
+
   // Success Feedback
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Synchronous guards & scanner wedge burst buffers
+  const isSubmittingRef = useRef(false);
+  const fastBufferRef = useRef('');
+  const burstTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const inputDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastProcessedQrRef = useRef<{ raw: string; at: number } | null>(null);
 
   // POKA-YOKE 5: Auto-Upload Fast Mode (1.5s countdown before automatic upload)
   const [autoUploadEnabled, setAutoUploadEnabled] = useState<boolean>(() => loadAutoUploadMode());
@@ -120,12 +137,23 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   useEffect(() => {
     return () => {
       cancelAutoUploadTimer();
+      if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
+      if (inputDebounceTimerRef.current) clearTimeout(inputDebounceTimerRef.current);
     };
   }, []);
 
+  // Automatically cancel pending auto-upload and clear unsubmitted boxes if Gerencia finalizes the count
+  useEffect(() => {
+    if (effectiveRound === 'CONTEO_FINALIZADO') {
+      cancelAutoUploadTimer();
+      setIsConfirmUploadOpen(false);
+      setIsConfirmRetryOpen(false);
+    }
+  }, [effectiveRound]);
+
   // Keep scanner focused on SKU input when initially ready, but NEVER steal focus if user is typing
   useEffect(() => {
-    if (!isConfirmUploadOpen && !isConfirmRetryOpen && !duplicateWarning) {
+    if (!isConfirmUploadOpen && !isConfirmRetryOpen && !duplicateWarning && !scanAlertModal) {
       if (document.activeElement && document.activeElement.tagName === 'INPUT') {
         return;
       }
@@ -133,7 +161,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         skuInputRef.current.focus({ preventScroll: true });
       }
     }
-  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, sku]);
+  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, scanAlertModal, sku]);
 
   const handleClearBoxes = () => {
     cancelAutoUploadTimer();
@@ -153,12 +181,18 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
     const normalizedEffectiveRound = normalizeRound(effectiveRound);
     const canonLoc = canonicalizeLocator(cleanLoc);
+    const normLoc = normalizeLocator(cleanLoc);
 
     const existingInRound = scans.filter((s) => {
       if (normalizeRound(s.conteoRound) !== normalizedEffectiveRound) return false;
       const sLoc = (s.localizador || '').trim().toUpperCase();
       const sCanon = canonicalizeLocator(sLoc);
-      return sLoc === cleanLoc || (canonLoc && sCanon === canonLoc);
+      const sNorm = normalizeLocator(sLoc);
+      return (
+        sLoc === cleanLoc ||
+        (canonLoc && sCanon === canonLoc) ||
+        (normLoc && sNorm === normLoc)
+      );
     });
 
     if (existingInRound.length > 0) {
@@ -237,6 +271,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     localizador: string;
     rawQr: string;
   }) => {
+    // Synchronous guard prevents double taps, Enter + tap races, or auto-upload vs manual races
+    if (isSubmittingRef.current) return;
+
     cancelAutoUploadTimer();
     const targetSku = (overrideData?.sku ?? sku).trim();
     const targetCantidad = overrideData?.cantidad ?? cantidad;
@@ -247,64 +284,80 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
     if (!targetSku || targetCantidad === '' || !targetLoc) return;
 
-    // Double check that localizador / QR was not already scanned in this round (local and Supabase Cloud)
+    isSubmittingRef.current = true;
     setIsUploading(true);
-    const isDup = await validateDuplicate(targetLoc, targetSku);
-    setIsUploading(false);
-    if (isDup) {
-      return;
-    }
 
-    // Dismiss dialog immediately to free UI
-    setIsConfirmUploadOpen(false);
-
-    // El número de usuario es el que se plasma en el archivo de Excel en la columna de usuario
-    const userExcelVal = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : (deviceInfo.operatorName || 'Usuario 1');
-    const isPicking = isPickingFila1(targetLoc);
-
-    const newItem: ScannedItem = {
-      id: generateUUID(),
-      sku: targetSku,
-      cantidad: Number(targetCantidad),
-      descripcion: targetDesc || (isPicking ? 'PICKING FILA 1' : ''),
-      subinventario: targetSubinv || 'LINEA',
-      localizador: targetLoc,
-      conteoRound: effectiveRound,
-      rawQr: targetRaw || `${targetSku}_${targetCantidad}_${targetDesc || 'PICKING FILA 1'}_${targetSubinv || 'LINEA'}_${targetLoc}`,
-      timestamp: new Date().toISOString(),
-      operador: userExcelVal,
-      nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
-      userNumber: deviceInfo.userNumber,
-      dispositivo: deviceInfo.deviceName || 'Zebra TC26',
-      syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
-    };
-
-    const uploadedSku = targetSku;
-    const uploadedQty = targetCantidad;
-
-    // Clear boxes immediately and refocus scanner so next scan is ready in < 50ms
-    handleClearBoxes();
-    refocusScanner();
-
-    confetti({
-      particleCount: 20,
-      spread: 40,
-      origin: { y: 0.8 },
-      colors: ['#10b981', '#f59e0b'],
-    });
-
-    setUploadFeedback(`✓ ${uploadedSku} (${uploadedQty} pzs) registrado. Guardando en Excel...`);
-    setTimeout(() => setUploadFeedback(null), 3000);
-
-    // Run upload without locking down UI interactions
-    setIsUploading(true);
     try {
+      // Double check that localizador / QR was not already scanned in this round (local and Supabase Cloud)
+      const isDup = await validateDuplicate(targetLoc, targetSku);
+      if (isDup) {
+        return;
+      }
+
+      // Dismiss dialog immediately to free UI
+      setIsConfirmUploadOpen(false);
+
+      // El número de usuario es el que se plasma en el archivo de Excel en la columna de usuario
+      const userExcelVal = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : (deviceInfo.operatorName || 'Usuario 1');
+      const isPicking = isPickingFila1(targetLoc);
+
+      const newItem: ScannedItem = {
+        id: generateUUID(),
+        sku: targetSku,
+        cantidad: Number(targetCantidad),
+        descripcion: targetDesc || (isPicking ? 'PICKING FILA 1' : ''),
+        subinventario: targetSubinv || 'LINEA',
+        localizador: targetLoc,
+        conteoRound: effectiveRound,
+        rawQr: targetRaw || `${targetSku}_${targetCantidad}_${targetDesc || 'PICKING FILA 1'}_${targetSubinv || 'LINEA'}_${targetLoc}`,
+        timestamp: new Date().toISOString(),
+        operador: userExcelVal,
+        nombreOperadorCompleto: deviceInfo.operatorName || operatorName,
+        userNumber: deviceInfo.userNumber,
+        dispositivo: deviceInfo.deviceName || 'Zebra TC26',
+        syncStateSharepoint: powerAutomateConfig.isEnabled && powerAutomateConfig.webhookUrl ? 'pending' : 'simulated',
+      };
+
+      const uploadedSku = targetSku;
+      const uploadedQty = targetCantidad;
+
+      // Clear boxes immediately and refocus scanner so next scan is ready in < 50ms
+      handleClearBoxes();
+      refocusScanner();
+
+      confetti({
+        particleCount: 20,
+        spread: 40,
+        origin: { y: 0.8 },
+        colors: ['#10b981', '#f59e0b'],
+      });
+
+      setUploadFeedback(`✓ ${uploadedSku} (${uploadedQty} pzs) registrado. Guardando en Excel...`);
+      setTimeout(() => setUploadFeedback(null), 3000);
+
       await onScanComplete(newItem);
     } catch {
       // Background sync will update status
     } finally {
+      isSubmittingRef.current = false;
       setIsUploading(false);
       refocusScanner();
+    }
+  };
+
+  const clearScannerBuffers = () => {
+    fastBufferRef.current = '';
+    if (burstTimerRef.current) {
+      clearTimeout(burstTimerRef.current);
+      burstTimerRef.current = null;
+    }
+    if (inputDebounceTimerRef.current) {
+      clearTimeout(inputDebounceTimerRef.current);
+      inputDebounceTimerRef.current = null;
+    }
+    setHardwareBuffer('');
+    if (hardwareInputRef.current) {
+      hardwareInputRef.current.value = '';
     }
   };
 
@@ -314,9 +367,27 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     const clean = qrString.trim();
     if (!clean) return;
 
+    // Deduplicate dual triggers (e.g. DataWedge onChange + Enter/fastBuffer firing on same barcode within 800ms)
+    const now = Date.now();
+    if (lastProcessedQrRef.current && lastProcessedQrRef.current.raw === clean && now - lastProcessedQrRef.current.at < 800) {
+      clearScannerBuffers();
+      return;
+    }
+    lastProcessedQrRef.current = { raw: clean, at: now };
+    clearScannerBuffers();
+
     if (effectiveRound === 'CONTEO_FINALIZADO') {
       soundManager.playError();
-      alert('El conteo ha sido finalizado por el Gerente. Para volver a escanear, solicita autorización de Gerencia en la vista web.');
+      if (!rawQrScanned) handleClearBoxes();
+      setHardwareBuffer('');
+      if (hardwareInputRef.current) hardwareInputRef.current.value = '';
+      alertModalOpenedAtRef.current = Date.now();
+      setScanAlertModal({
+        type: 'finalized',
+        badge: 'CONTEO FINALIZADO',
+        title: 'El conteo ha sido cerrado por Gerencia',
+        message: 'Las capturas están bloqueadas porque el inventario finalizó. Solicita autorización a Gerencia en la vista web para abrir un nuevo ciclo.',
+      });
       return;
     }
 
@@ -324,7 +395,17 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
     if (!parsed.isValid) {
       soundManager.playError();
-      alert(parsed.error || 'Código QR no reconocido. Estructura esperada: SKU_Cantidad_Descripcion_Subinventario_Localizador');
+      if (!rawQrScanned) handleClearBoxes();
+      setHardwareBuffer('');
+      if (hardwareInputRef.current) hardwareInputRef.current.value = '';
+      alertModalOpenedAtRef.current = Date.now();
+      setScanAlertModal({
+        type: 'error',
+        badge: 'FORMATO QR NO RECONOCIDO',
+        title: 'No se pudo leer este código QR',
+        message: parsed.error || 'Estructura esperada: SKU_Cantidad_Descripcion_Subinventario_Localizador',
+        rawSample: clean.length > 90 ? `${clean.slice(0, 90)}…` : clean,
+      });
       return;
     }
 
@@ -424,15 +505,26 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     return false;
   };
 
+  // Schedule debounced distribution on input onChange so char-by-char DataWedge never splits mid-locator
+  const scheduleInputQrParse = (val: string) => {
+    if (inputDebounceTimerRef.current) {
+      clearTimeout(inputDebounceTimerRef.current);
+      inputDebounceTimerRef.current = null;
+    }
+    if (!val || val.split('_').length < 5) return;
+    inputDebounceTimerRef.current = setTimeout(() => {
+      inputDebounceTimerRef.current = null;
+      tryParseAndDistribute(val);
+    }, 140);
+  };
+
   // Global hardware scanner listener
   useEffect(() => {
-    let fastBuffer = '';
     let lastKeyTime = Date.now();
-    let burstTimer: NodeJS.Timeout | null = null;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       // If modal is open, ignore scanner keystrokes
-      if (isConfirmUploadOpen || isConfirmRetryOpen || duplicateWarning) {
+      if (isConfirmUploadOpen || isConfirmRetryOpen || duplicateWarning || scanAlertModal) {
         return;
       }
 
@@ -445,29 +537,46 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       // If time between keys is large (>180ms), reset the fast burst buffer
       if (timeSinceLastKey > 180) {
-        fastBuffer = '';
+        fastBufferRef.current = '';
       }
 
       // If Enter key is pressed (sent by DataWedge suffix or user)
       if (e.key === 'Enter') {
-        // 1. Check if the focused input element has a full QR string
+        if (inputDebounceTimerRef.current) {
+          clearTimeout(inputDebounceTimerRef.current);
+          inputDebounceTimerRef.current = null;
+        }
+        if (burstTimerRef.current) {
+          clearTimeout(burstTimerRef.current);
+          burstTimerRef.current = null;
+        }
+
+        // 1. Check if the focused input element has a full or malformed QR string
         if (isInput && (target as HTMLInputElement).value) {
           const val = (target as HTMLInputElement).value;
           if (tryParseAndDistribute(val)) {
             e.preventDefault();
             e.stopPropagation();
-            fastBuffer = '';
+            fastBufferRef.current = '';
+            (target as HTMLInputElement).blur();
+            return;
+          }
+          if (target.id === 'field-sku' && val.includes('_')) {
+            e.preventDefault();
+            e.stopPropagation();
+            fastBufferRef.current = '';
+            handleProcessBarcode(val);
             (target as HTMLInputElement).blur();
             return;
           }
         }
 
         // 2. Check if our fastBuffer has a full QR string
-        if (fastBuffer.length > 5) {
-          if (tryParseAndDistribute(fastBuffer)) {
+        if (fastBufferRef.current.length > 5) {
+          if (tryParseAndDistribute(fastBufferRef.current)) {
             e.preventDefault();
             e.stopPropagation();
-            fastBuffer = '';
+            fastBufferRef.current = '';
             if (isInput) (target as HTMLInputElement).blur();
             return;
           }
@@ -482,29 +591,28 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 
       // If printable character
       if (e.key.length === 1) {
-        fastBuffer += e.key;
+        fastBufferRef.current += e.key;
 
         // Clear any existing burst timer
-        if (burstTimer) {
-          clearTimeout(burstTimer);
-          burstTimer = null;
+        if (burstTimerRef.current) {
+          clearTimeout(burstTimerRef.current);
+          burstTimerRef.current = null;
         }
 
-        // Check if fastBuffer already contains 5 parts with underscores
-        if (fastBuffer.includes('_') && fastBuffer.split('_').length >= 5) {
-          // Debounce slightly (80ms) to allow the last segment to finish typing, then distribute
-          burstTimer = setTimeout(() => {
-            if (fastBuffer.split('_').length >= 5) {
-              const parsed = parseInventoryQr(fastBuffer);
+        // Check if fastBuffer already contains 5 parts with underscores (wait 140ms for trailing chars/Enter)
+        if (fastBufferRef.current.includes('_') && fastBufferRef.current.split('_').length >= 5) {
+          burstTimerRef.current = setTimeout(() => {
+            const buffered = fastBufferRef.current;
+            if (buffered.split('_').length >= 5) {
+              const parsed = parseInventoryQr(buffered);
               if (parsed.isValid) {
-                handleProcessBarcode(fastBuffer);
-                fastBuffer = '';
+                handleProcessBarcode(buffered);
                 if (document.activeElement instanceof HTMLElement) {
                   document.activeElement.blur();
                 }
               }
             }
-          }, 80);
+          }, 140);
         }
       }
     };
@@ -512,9 +620,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     window.addEventListener('keydown', handleKeyDown, true);
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
-      if (burstTimer) clearTimeout(burstTimer);
+      if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
     };
-  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, effectiveRound, scans]);
+  }, [isConfirmUploadOpen, isConfirmRetryOpen, duplicateWarning, scanAlertModal, effectiveRound, scans]);
 
   // Clear boxes after retry confirmation
   const handleConfirmRetry = () => {
@@ -540,6 +648,31 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     round2Authorizations[deviceInfo.userNumber!] === false &&
     userRounds?.[deviceInfo.userNumber!] !== '2DO_CONTEO';
 
+  // Own operator session totals for the special end-of-count summary screen
+  const ownFinalSummary = React.useMemo(() => {
+    const userLabel = deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : null;
+    const ownScans = scans.filter((s) => {
+      if (s.sku && s.sku.startsWith('TEST-SKU')) return false;
+      if (deviceInfo.userNumber) {
+        return s.userNumber === deviceInfo.userNumber || s.operador === userLabel;
+      }
+      if (deviceInfo.operatorName) {
+        return s.nombreOperadorCompleto === deviceInfo.operatorName || s.operador === deviceInfo.operatorName;
+      }
+      return false;
+    });
+    const r1 = ownScans.filter((s) => normalizeRound(s.conteoRound) === '1ER_CONTEO');
+    const r2 = ownScans.filter((s) => normalizeRound(s.conteoRound) === '2DO_CONTEO');
+    const r3 = ownScans.filter((s) => normalizeRound(s.conteoRound) === '3ER_CONTEO');
+    return {
+      totalScans: ownScans.length,
+      totalPieces: ownScans.reduce((acc, s) => acc + (Number(s.cantidad) || 0), 0),
+      r1Scans: r1.length,
+      r2Scans: r2.length,
+      r3Scans: r3.length,
+    };
+  }, [scans, deviceInfo.userNumber, deviceInfo.operatorName]);
+
   return (
     <div className="max-w-2xl mx-auto space-y-4">
       {/* Hidden Buffer Input for TC26 Hardware Laser (inputMode="none" prevents soft keyboard from appearing) */}
@@ -553,15 +686,15 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         onChange={(e) => {
           const val = e.target.value;
           setHardwareBuffer(val);
-          if (val.split('_').length >= 5) {
-            if (tryParseAndDistribute(val)) {
-              setHardwareBuffer('');
-            }
-          }
+          scheduleInputQrParse(val);
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
+            if (inputDebounceTimerRef.current) {
+              clearTimeout(inputDebounceTimerRef.current);
+              inputDebounceTimerRef.current = null;
+            }
             if (tryParseAndDistribute(hardwareBuffer)) {
               setHardwareBuffer('');
             } else {
@@ -666,8 +799,74 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         </div>
       )}
 
-      {/* 2DO CONTEO BLOCKED SCREEN (WHEN USER IS NOT AUTHORIZED BY GERENTE) */}
-      {isBlockedInRound2 ? (
+      {/* CIERRE ESPECIAL: CONTEO FINALIZADO POR GERENCIA */}
+      {effectiveRound === 'CONTEO_FINALIZADO' ? (
+        <div className="bg-slate-900 border-2 border-emerald-500/50 rounded-2xl p-6 sm:p-8 shadow-2xl text-center space-y-5 animate-in fade-in">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 mx-auto shadow-inner">
+            <CheckCircle2 className="w-9 h-9" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono text-[11px] font-bold inline-block">
+              INVENTARIO CERRADO POR GERENCIA
+            </span>
+            <h3 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+              ¡Conteo Finalizado{deviceInfo.operatorName ? `, ${deviceInfo.operatorName}` : ''}!
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
+              La auditoría de inventario ha concluido y el escáner láser quedó bloqueado para evitar capturas fuera de turno.
+            </p>
+          </div>
+
+          {/* Own Operator Summary KPIs */}
+          <div className="grid grid-cols-2 gap-3 max-w-md mx-auto text-left">
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+              <span className="text-[11px] text-slate-400 block">Mis Códigos QR</span>
+              <span className="text-2xl font-mono font-extrabold text-emerald-400 tabular-nums">
+                {ownFinalSummary.totalScans}
+              </span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">ubicaciones registradas</span>
+            </div>
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5">
+              <span className="text-[11px] text-slate-400 block">Mis Piezas Contadas</span>
+              <span className="text-2xl font-mono font-extrabold text-amber-400 tabular-nums">
+                {ownFinalSummary.totalPieces.toLocaleString()}
+              </span>
+              <span className="text-[10px] text-slate-500 block mt-0.5">piezas totales</span>
+            </div>
+          </div>
+
+          {ownFinalSummary.totalScans > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono">
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300">
+                1er Conteo: <strong>{ownFinalSummary.r1Scans}</strong>
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-blue-950/60 border border-blue-500/30 text-blue-300">
+                2do Conteo: <strong>{ownFinalSummary.r2Scans}</strong>
+              </span>
+              {ownFinalSummary.r3Scans > 0 && (
+                <span className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/30 text-amber-300">
+                  3er Conteo: <strong>{ownFinalSummary.r3Scans}</strong>
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400 font-mono max-w-md mx-auto flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Usuario: <strong className="text-white">{deviceInfo.userNumber ? `Usuario ${deviceInfo.userNumber}` : 'Sin asignar'}</strong>
+            </span>
+            <span>
+              Terminal: <strong className="text-white">{deviceInfo.deviceName}</strong>
+            </span>
+          </div>
+
+          <p className="text-[11px] text-slate-400 max-w-sm mx-auto leading-relaxed">
+            Puedes entregar o resguardar la terminal TC26, o esperar a que Gerencia autorice un nuevo ciclo de inventario.
+          </p>
+        </div>
+      ) : isBlockedInRound2 ? (
+        /* 2DO CONTEO BLOCKED SCREEN (WHEN USER IS NOT AUTHORIZED BY GERENTE) */
         <div className="bg-slate-900 border-2 border-rose-500/60 rounded-2xl p-6 sm:p-8 shadow-2xl text-center space-y-4 animate-in fade-in">
           <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mx-auto shadow-inner">
             <Lock className="w-8 h-8" />
@@ -774,7 +973,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             {sku.includes('_') && (
               <button
                 type="button"
-                onClick={() => tryParseAndDistribute(sku)}
+                onClick={() => handleProcessBarcode(sku)}
                 className="text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/40 active:scale-95 transition-all animate-pulse flex items-center gap-1"
               >
                 <span>⚡</span>
@@ -786,17 +985,15 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             id="field-sku"
             ref={skuInputRef}
             type="text"
-            readOnly={hasDataInBoxes && !isFila1Picking}
-            tabIndex={hasDataInBoxes && !isFila1Picking ? -1 : 0}
+            readOnly={hasDataInBoxes && !isFila1Picking && Boolean(rawQrScanned)}
+            tabIndex={hasDataInBoxes && !isFila1Picking && Boolean(rawQrScanned) ? -1 : 0}
             inputMode={isFila1Picking ? "text" : "none"}
             value={sku}
             onChange={(e) => {
               cancelAutoUploadTimer();
               const val = e.target.value;
-              if (val.split('_').length >= 5) {
-                if (tryParseAndDistribute(val)) return;
-              }
               setSku(val.toUpperCase());
+              scheduleInputQrParse(val);
             }}
             onBlur={async (e) => {
               const val = e.target.value.trim();
@@ -807,6 +1004,10 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
+                if (inputDebounceTimerRef.current) {
+                  clearTimeout(inputDebounceTimerRef.current);
+                  inputDebounceTimerRef.current = null;
+                }
                 const targetVal = (e.target as HTMLInputElement).value;
                 if (targetVal.split('_').length >= 5) {
                   tryParseAndDistribute(targetVal);
@@ -973,7 +1174,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           {/* Button 1: Subir Información a Excel */}
           <button
             onClick={async () => {
-              if (hasDataInBoxes) {
+              if (hasDataInBoxes && !isSubmittingRef.current && !isUploading) {
+                cancelAutoUploadTimer();
                 // Verify duplicate locally and in cloud for manual entry or scanned item
                 setIsUploading(true);
                 const isDup = await validateDuplicate(localizador, sku);
@@ -984,15 +1186,15 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 setIsConfirmUploadOpen(true);
               }
             }}
-            disabled={!hasDataInBoxes}
+            disabled={!hasDataInBoxes || isUploading}
             className={`w-full min-h-[56px] py-3.5 px-4 rounded-xl font-extrabold text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-lg transition-all active:scale-[0.98] leading-tight ${
-              hasDataInBoxes
+              hasDataInBoxes && !isUploading
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/50 cursor-pointer'
                 : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50'
             }`}
           >
             <CloudUpload className="w-5 h-5 shrink-0" />
-            <span className="whitespace-nowrap">Subir Información a Excel</span>
+            <span className="whitespace-nowrap">{isUploading ? 'Validando...' : 'Subir Información a Excel'}</span>
           </button>
 
           {/* Button 2: Reintentar */}
@@ -1169,6 +1371,62 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               >
                 <Check className="w-5 h-5 shrink-0" />
                 <span>Aceptar y Continuar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INDUSTRIAL SCAN ALERT MODAL (REPLACES NATIVE BROWSER ALERT) */}
+      {scanAlertModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-100">
+          <div className="bg-slate-900 border-2 border-rose-500 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center mx-auto text-rose-400 shrink-0">
+              {scanAlertModal.type === 'finalized' ? (
+                <Lock className="w-7 h-7" />
+              ) : (
+                <AlertTriangle className="w-7 h-7" />
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-mono text-[11px] font-bold inline-block mb-1">
+                {scanAlertModal.badge}
+              </div>
+              <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
+                {scanAlertModal.title}
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                {scanAlertModal.message}
+              </p>
+
+              {scanAlertModal.rawSample && (
+                <div className="mt-2 p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-left">
+                  <span className="text-[10px] font-mono text-slate-500 block mb-0.5">Lectura recibida:</span>
+                  <code className="text-[11px] font-mono text-rose-300 break-all leading-snug block">
+                    {scanAlertModal.rawSample}
+                  </code>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setScanAlertModal(null);
+                  refocusScanner();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && Date.now() - alertModalOpenedAtRef.current < 400) {
+                    e.preventDefault();
+                  }
+                }}
+                className="w-full min-h-[52px] py-3 px-4 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-bold text-sm sm:text-base rounded-xl transition-all shadow-md flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
+                autoFocus
+              >
+                <Check className="w-5 h-5 shrink-0" />
+                <span>Entendido</span>
               </button>
             </div>
           </div>

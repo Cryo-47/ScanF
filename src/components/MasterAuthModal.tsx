@@ -53,6 +53,7 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
   // Change PIN state
   const [isChangingPin, setIsChangingPin] = useState(false);
   const [newPin, setNewPin] = useState('');
+  const [pinSavedMsg, setPinSavedMsg] = useState(false);
 
   // SharePoint form state
   const [paWebhookUrl, setPaWebhookUrl] = useState(powerAutomateConfig.webhookUrl);
@@ -113,7 +114,8 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
       setIsChangingPin(false);
       setNewPin('');
       soundManager.playSuccess();
-      alert('Nuevo PIN de Usuario Master guardado exitosamente.');
+      setPinSavedMsg(true);
+      setTimeout(() => setPinSavedMsg(false), 3000);
     }
   };
 
@@ -627,13 +629,21 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
             {/* Footer with PIN Management & Logout */}
             <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
               {!isChangingPin ? (
-                <button
-                  onClick={() => setIsChangingPin(true)}
-                  className="text-[11px] text-slate-400 hover:text-amber-400 underline flex items-center gap-1"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>Cambiar PIN Master</span>
-                </button>
+                <div className="flex items-center gap-2.5">
+                  <button
+                    onClick={() => setIsChangingPin(true)}
+                    className="text-[11px] text-slate-400 hover:text-amber-400 underline flex items-center gap-1"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>Cambiar PIN Master</span>
+                  </button>
+                  {pinSavedMsg && (
+                    <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Nuevo PIN guardado</span>
+                    </span>
+                  )}
+                </div>
               ) : (
                 <div className="flex gap-1.5 items-center">
                   <input

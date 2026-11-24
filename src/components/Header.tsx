@@ -7,7 +7,8 @@ import {
   Download,
   ShieldCheck,
   Smartphone,
-  Globe
+  Globe,
+  HelpCircle
 } from 'lucide-react';
 import { CountRound, UserRole } from '../types/inventory';
 import { exportScansToCsv, isRunningInApkOrStandalone } from '../utils/storage';
@@ -18,6 +19,7 @@ interface HeaderProps {
   setActiveTab: (tab: 'scanner' | 'history' | 'powerautomate') => void;
   countRound: CountRound;
   onOpenMasterAuth: () => void;
+  onOpenQuickGuide?: () => void;
   scansCount: number;
   scans: import('../types/inventory').ScannedItem[];
   userRole: UserRole;
@@ -29,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   countRound,
   onOpenMasterAuth,
+  onOpenQuickGuide,
   scansCount,
   scans,
   userRole,
@@ -152,6 +155,19 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="hidden" aria-hidden="true">
             {/* Oculto: el modo APK y Gerente se determinan por entorno sin cambio manual */}
           </div>
+
+          {/* Guía Rápida Operativa (?) */}
+          {onOpenQuickGuide && (
+            <button
+              type="button"
+              onClick={onOpenQuickGuide}
+              title="Guía rápida operativa"
+              className="px-2 sm:px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-400 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+            >
+              <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="hidden sm:inline">Guía</span>
+            </button>
+          )}
 
           {/* Master Indicator Badge (when Master is unlocked via 12 secret taps) */}
           {userRole === 'MASTER' && (
