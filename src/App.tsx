@@ -59,6 +59,10 @@ import { MasterAuthModal } from './components/MasterAuthModal';
 import { DeviceSetupModal } from './components/DeviceSetupModal';
 import { HandheldCheckInModal } from './components/HandheldCheckInModal';
 import { QuickGuideModal } from './components/QuickGuideModal';
+import { Breadcrumb } from './components/ui/Controls';
+import { Scan, FileSpreadsheet, Workflow } from 'lucide-react';
+import { motion } from 'motion/react';
+import { getSupabaseRestEndpoint } from './utils/syncService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'scanner' | 'history' | 'powerautomate'>('scanner');
@@ -180,15 +184,22 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleVisibility);
 
-    // If user closes the app, set status to offline if deviceId is known
+    // If user closes the app, set status to offline via authenticated PATCH keepalive
     const handleUnload = () => {
       if (deviceInfo.deviceId && supabaseConfig.url && supabaseConfig.anonKey) {
         try {
-          const endpoint = `${supabaseConfig.url.replace(/\/+$/, '')}/rest/v1/terminal_sessions?device_id=eq.${encodeURIComponent(deviceInfo.deviceId)}`;
+          const endpoint = `${getSupabaseRestEndpoint(supabaseConfig.url, 'terminal_sessions')}?device_id=eq.${encodeURIComponent(deviceInfo.deviceId)}`;
           const payload = JSON.stringify({ status: 'offline', updated_at: new Date().toISOString() });
-          if (navigator.sendBeacon) {
-            navigator.sendBeacon(endpoint, new Blob([payload], { type: 'application/json' }));
-          }
+          fetch(endpoint, {
+            method: 'PATCH',
+            keepalive: true,
+            headers: {
+              'Content-Type': 'application/json',
+              'apikey': supabaseConfig.anonKey.trim(),
+              'Authorization': `Bearer ${supabaseConfig.anonKey.trim()}`,
+            },
+            body: payload,
+          }).catch(() => {});
         } catch {}
       }
     };
@@ -318,14 +329,10 @@ export default function App() {
             }
           }
 
-          // C) Global round synchronization
+          // C) Global round synchronization (preserve userNumber on CONTEO_FINALIZADO so summary displays cleanly)
           if (control.globalRound && control.globalRound !== countRound) {
             setCountRound(control.globalRound);
             saveCountRound(control.globalRound);
-            if (control.globalRound === 'CONTEO_FINALIZADO') {
-              unlockUserNumberCycle(false);
-              setDeviceInfo(loadDeviceInfo());
-            }
           }
 
           // D) Individual user rounds synchronization (Gerente assignment takes precedence)
@@ -499,16 +506,15 @@ export default function App() {
   }, [supabaseConfig, countRound]);
 
   // Handheld check-in prompt:
-  // In APK mode, if userNumber is not chosen/locked yet, or if round changed and name needs re-prompt
+  // In APK mode, never open spontaneously while the round is CONTEO_FINALIZADO
   useEffect(() => {
-    if (userRole === 'OPERADOR_APK') {
+    if (userRole === 'OPERADOR_APK' && activeDeviceRound !== 'CONTEO_FINALIZADO') {
       const needsInitialBinding = !deviceInfo.userNumber || !deviceInfo.isUserNumberLocked;
       const needsRoundReauth = Boolean(
         deviceInfo.userNumber && 
         deviceInfo.isUserNumberLocked && 
         deviceInfo.registeredRound && 
-        deviceInfo.registeredRound !== activeDeviceRound && 
-        activeDeviceRound !== 'CONTEO_FINALIZADO'
+        deviceInfo.registeredRound !== activeDeviceRound
       );
 
       if (needsInitialBinding || needsRoundReauth) {
@@ -651,26 +657,22 @@ export default function App() {
     saveCountRound(newRound);
 
     let nextUserRounds = { ...userRounds };
+    for (let i = 1; i <= 14; i++) nextUserRounds[i] = newRound;
+    setUserRounds(nextUserRounds);
+    saveUserRounds(nextUserRounds);
+
+    // Optimistically reflect round change on monitoring cards immediately
+    setCloudTerminalSessions((prev) =>
+      prev.map((s) => ({ ...s, currentRound: newRound }))
+    );
+
     if (newRound === '1ER_CONTEO') {
-      for (let i = 1; i <= 14; i++) nextUserRounds[i] = '1ER_CONTEO';
-      setUserRounds(nextUserRounds);
-      saveUserRounds(nextUserRounds);
       unlockUserNumberCycle();
       setDeviceInfo(loadDeviceInfo());
-    } else if (newRound === '2DO_CONTEO') {
-      for (let i = 1; i <= 14; i++) nextUserRounds[i] = '2DO_CONTEO';
-      setUserRounds(nextUserRounds);
-      saveUserRounds(nextUserRounds);
-    } else if (newRound === '3ER_CONTEO') {
-      for (let i = 1; i <= 14; i++) nextUserRounds[i] = '3ER_CONTEO';
-      setUserRounds(nextUserRounds);
-      saveUserRounds(nextUserRounds);
-    } else if (newRound === 'CONTEO_FINALIZADO') {
-      for (let i = 1; i <= 14; i++) nextUserRounds[i] = 'CONTEO_FINALIZADO';
-      setUserRounds(nextUserRounds);
-      saveUserRounds(nextUserRounds);
-      unlockUserNumberCycle();
-      setDeviceInfo(loadDeviceInfo());
+    } else if (deviceInfo.userNumber) {
+      const updatedDev = { ...deviceInfo, registeredRound: newRound };
+      setDeviceInfo(updatedDev);
+      saveDeviceInfo(updatedDev);
     }
 
     pushRoundControl(newRound, nextUserRounds, round2Authorizations, supabaseConfig);
@@ -898,7 +900,7 @@ export default function App() {
     saveDeviceInfo(newInfo);
   };
 
-  // Handheld Initial Check-in (Name + User Number 1 to 10)
+  // Handheld Initial Check-in (Name + User Number 1 to 14)
   const handleSaveCheckIn = async (fullName: string, userNumber: number) => {
     const updated: DeviceInfo = {
       ...deviceInfo,
@@ -909,6 +911,7 @@ export default function App() {
     };
     setDeviceInfo(updated);
     saveDeviceInfo(updated);
+    setHandheldRebootNotice(null);
     setIsHandheldCheckInOpen(false);
 
     // Immediately push presence to Supabase so Gerente sees it in real time
@@ -930,6 +933,7 @@ export default function App() {
     };
     setDeviceInfo(updated);
     saveDeviceInfo(updated);
+    setHandheldRebootNotice(null);
     setIsHandheldCheckInOpen(false);
 
     const ownStats = getTerminalOwnStats(scans, updated);
@@ -989,8 +993,22 @@ export default function App() {
     round3: itemizedRound3,
   };
 
+  const showWebNav = userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone();
+  const breadcrumbItems = [
+    { label: 'ScanF', onClick: showWebNav ? () => setActiveTab('scanner') : undefined },
+    { label: userRole === 'OPERADOR_APK' ? 'Terminal TC26' : userRole === 'MASTER' ? 'Master' : 'Gerencia' },
+    {
+      label:
+        activeTab === 'history'
+          ? 'Consola & Historial Excel'
+          : activeTab === 'powerautomate'
+          ? 'Enlaces SharePoint & Supabase'
+          : 'Escáner QR',
+    },
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
+    <div className="min-h-screen bg-industrial-mesh text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-black">
       {/* Minimalist Top Bar with Secret 12-Tap Trigger on App Logo */}
       <Header
         activeTab={activeTab}
@@ -999,13 +1017,19 @@ export default function App() {
         onOpenMasterAuth={() => setIsMasterAuthOpen(true)}
         onOpenQuickGuide={() => setIsQuickGuideOpen(true)}
         scansCount={scans.length}
-        scans={scans}
         userRole={userRole}
-        onSetUserRole={setUserRole}
       />
 
       {/* Main Container */}
-      <main className={`flex-1 w-full mx-auto p-3 sm:p-6 transition-all ${activeTab === 'history' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+      <main
+        className={`flex-1 w-full mx-auto px-3 sm:px-6 pt-3 sm:pt-5 ${
+          showWebNav ? 'pb-22 md:pb-8' : 'pb-20 sm:pb-8'
+        } transition-all ${activeTab === 'history' ? 'max-w-7xl' : 'max-w-5xl'}`}
+      >
+        <div className="mb-3 sm:mb-4">
+          <Breadcrumb items={breadcrumbItems} />
+        </div>
+
         {/* In OPERADOR_APK mode: ALWAYS render ScannerView */}
         {(activeTab === 'scanner' || userRole === 'OPERADOR_APK') && (
           <ScannerView
@@ -1023,11 +1047,12 @@ export default function App() {
             onOpenMasterAuth={() => setIsMasterAuthOpen(true)}
             onOpenPowerAutomate={() => setActiveTab('powerautomate')}
             onOpenCheckIn={() => setIsHandheldCheckInOpen(true)}
+            onManualCloudRefresh={handleRefreshCloudScans}
           />
         )}
 
         {/* Historial Excel is rendered for Gerente and Master (Web only, never in APK) */}
-        {userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone() && activeTab === 'history' && (
+        {showWebNav && activeTab === 'history' && (
           <HistoryView
             scans={scans}
             powerAutomateConfig={powerAutomateConfig}
@@ -1067,6 +1092,67 @@ export default function App() {
         )}
       </main>
 
+      {/* Mobile Thumb-Zone Tab Bar (Web Gerente/Master only, <= 64px height) */}
+      {showWebNav && (
+        <nav
+          aria-label="Navegación móvil"
+          className="md:hidden fixed bottom-0 inset-x-0 z-40 glass-surface-strong border-t border-slate-800/90 px-3 py-1.5 flex items-center justify-around"
+        >
+          <button
+            type="button"
+            onClick={() => setActiveTab('scanner')}
+            className={`relative flex-1 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[11px] font-semibold cursor-pointer ${
+              activeTab === 'scanner' ? 'text-amber-400' : 'text-slate-400'
+            }`}
+          >
+            {activeTab === 'scanner' && (
+              <motion.span
+                layoutId="mobile-tab-indicator"
+                className="absolute top-0 w-8 h-0.5 rounded-full bg-amber-400"
+              />
+            )}
+            <Scan className="w-4 h-4" />
+            <span>Escáner</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('history')}
+            className={`relative flex-1 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[11px] font-semibold cursor-pointer ${
+              activeTab === 'history' ? 'text-amber-400' : 'text-slate-400'
+            }`}
+          >
+            {activeTab === 'history' && (
+              <motion.span
+                layoutId="mobile-tab-indicator"
+                className="absolute top-0 w-8 h-0.5 rounded-full bg-amber-400"
+              />
+            )}
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Consola ({scans.length})</span>
+          </button>
+
+          {userRole === 'MASTER' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('powerautomate')}
+              className={`relative flex-1 py-1.5 rounded-xl flex flex-col items-center gap-0.5 text-[11px] font-semibold cursor-pointer ${
+                activeTab === 'powerautomate' ? 'text-amber-400' : 'text-slate-400'
+              }`}
+            >
+              {activeTab === 'powerautomate' && (
+                <motion.span
+                  layoutId="mobile-tab-indicator"
+                  className="absolute top-0 w-8 h-0.5 rounded-full bg-amber-400"
+                />
+              )}
+              <Workflow className="w-4 h-4" />
+              <span>Enlaces</span>
+            </button>
+          )}
+        </nav>
+      )}
+
       {/* Master User Configurations Modal (SharePoint & Supabase ONLY, no rounds) */}
       <MasterAuthModal
         isOpen={isMasterAuthOpen}
@@ -1089,7 +1175,7 @@ export default function App() {
         onSave={handleSaveDeviceInfo}
       />
 
-      {/* Handheld Check-in Modal (Full Name + User Number 1 to 10 Lock) */}
+      {/* Handheld Check-in Modal (Full Name + User Number 1 to 14 Lock) */}
       <HandheldCheckInModal
         isOpen={isHandheldCheckInOpen}
         deviceInfo={deviceInfo}
@@ -1099,6 +1185,7 @@ export default function App() {
         cloudTerminalSessions={cloudTerminalSessions}
         scans={scans}
         supabaseConfig={supabaseConfig}
+        rebootNotice={handheldRebootNotice}
       />
 
       {/* Quick Operational Guide Modal (?) */}

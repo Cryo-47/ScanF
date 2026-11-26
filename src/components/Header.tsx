@@ -1,18 +1,16 @@
 import React, { useRef } from 'react';
-import { 
-  Scan, 
-  FileSpreadsheet, 
-  Workflow, 
-  Lock, 
-  Download,
+import { motion } from 'motion/react';
+import {
+  Scan,
+  FileSpreadsheet,
+  Workflow,
   ShieldCheck,
-  Smartphone,
-  Globe,
-  HelpCircle
+  HelpCircle,
 } from 'lucide-react';
 import { CountRound, UserRole } from '../types/inventory';
-import { exportScansToCsv, isRunningInApkOrStandalone } from '../utils/storage';
+import { isRunningInApkOrStandalone } from '../utils/storage';
 import { soundManager } from '../utils/audioHaptics';
+import { Badge, Tooltip } from './ui/Controls';
 
 interface HeaderProps {
   activeTab: 'scanner' | 'history' | 'powerautomate';
@@ -21,9 +19,7 @@ interface HeaderProps {
   onOpenMasterAuth: () => void;
   onOpenQuickGuide?: () => void;
   scansCount: number;
-  scans: import('../types/inventory').ScannedItem[];
   userRole: UserRole;
-  onSetUserRole: (role: UserRole) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -33,9 +29,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenMasterAuth,
   onOpenQuickGuide,
   scansCount,
-  scans,
   userRole,
-  onSetUserRole,
 }) => {
   // Secret 12-tap detection on app icon
   const tapCountRef = useRef(0);
@@ -43,14 +37,12 @@ export const Header: React.FC<HeaderProps> = ({
 
   const handleSecretIconTap = () => {
     const now = Date.now();
-    // If more than 2.5 seconds elapsed between taps, reset count
     if (now - lastTapTimeRef.current > 2500) {
       tapCountRef.current = 0;
     }
     lastTapTimeRef.current = now;
     tapCountRef.current += 1;
 
-    // Check if 12 consecutive taps reached
     if (tapCountRef.current >= 12) {
       tapCountRef.current = 0;
       soundManager.playSuccess();
@@ -58,127 +50,130 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
-  const getRoundBadge = () => {
-    if (countRound === '1ER_CONTEO') return { label: '1er Conteo', color: 'text-emerald-400 bg-emerald-950/50 border-emerald-500/40' };
-    if (countRound === '2DO_CONTEO') return { label: '2do Conteo', color: 'text-blue-400 bg-blue-950/50 border-blue-500/40' };
-    if (countRound === '3ER_CONTEO') return { label: '3er Conteo', color: 'text-amber-400 bg-amber-950/50 border-amber-500/40' };
-    return { label: 'Finalizado', color: 'text-rose-400 bg-rose-950/50 border-rose-500/40' };
-  };
+  const roundBadge =
+    countRound === '1ER_CONTEO'
+      ? { label: '1er Conteo', tone: 'emerald' as const }
+      : countRound === '2DO_CONTEO'
+      ? { label: '2do Conteo', tone: 'blue' as const }
+      : countRound === '3ER_CONTEO'
+      ? { label: '3er Conteo', tone: 'amber' as const }
+      : { label: 'Finalizado', tone: 'rose' as const };
 
-  const badge = getRoundBadge();
+  const showWebNav = userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone();
+
+  const navItems: Array<{
+    id: 'scanner' | 'history' | 'powerautomate';
+    label: string;
+    icon: React.ReactNode;
+    badge?: number;
+  }> = [
+    { id: 'scanner', label: 'Escáner', icon: <Scan className="w-4 h-4 shrink-0" /> },
+    {
+      id: 'history',
+      label: 'Consola & Excel',
+      icon: <FileSpreadsheet className="w-4 h-4 shrink-0" />,
+      badge: scansCount,
+    },
+    ...(userRole === 'MASTER'
+      ? [
+          {
+            id: 'powerautomate' as const,
+            label: 'SharePoint',
+            icon: <Workflow className="w-4 h-4 shrink-0" />,
+          },
+        ]
+      : []),
+  ];
 
   return (
-    <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 shadow-md">
-      <div className="max-w-5xl mx-auto px-3 sm:px-4 min-h-16 h-auto py-2 flex flex-wrap items-center justify-between gap-2.5 sm:gap-4">
-        
-        {/* Zone 1: Secret 12-tap Logo "ScanF" (Inconspicuous, looks completely like standard branding) */}
-        <div 
+    <header className="sticky top-0 z-40 glass-surface border-b border-slate-800/80 shadow-lg">
+      <div className="max-w-7xl mx-auto px-3 sm:px-5 h-15 flex items-center justify-between gap-3">
+        {/* Zone 1: Brand + Active Round Badge (Secret 12-tap trigger preserved) */}
+        <div
           onClick={handleSecretIconTap}
-          className="flex items-center gap-2 select-none cursor-default py-1 shrink-0"
+          className="flex items-center gap-2.5 select-none cursor-default py-1 shrink-0"
           role="presentation"
         >
-          <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 pointer-events-none shrink-0">
+          <div className="w-8.5 h-8.5 rounded-xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center text-amber-400 pointer-events-none shrink-0 shadow-inner">
             <Scan className="w-4 h-4" />
           </div>
-          <span className="font-extrabold tracking-tight text-white text-lg sm:text-xl whitespace-nowrap pointer-events-none">
+          <span className="font-extrabold tracking-tight text-white text-lg whitespace-nowrap pointer-events-none">
             Scan<span className="text-amber-400">F</span>
           </span>
-
-          <span className={`px-2 py-0.5 rounded text-[10px] sm:text-[11px] font-mono font-bold border whitespace-nowrap pointer-events-none ${badge.color}`}>
-            {badge.label}
-          </span>
+          <Badge tone={roundBadge.tone} dot pulse={countRound !== 'CONTEO_FINALIZADO'}>
+            {roundBadge.label}
+          </Badge>
         </div>
 
-        {/* Zone 2: Navigation Links (Conditioned by Role) */}
-        {/* In OPERADOR_APK mode: NO TABS ARE SHOWN AT ALL (only Escáner exists) */}
-        {userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone() && (
-          <nav className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm font-medium overflow-x-auto py-1">
-            <button
-              onClick={() => setActiveTab('scanner')}
-              className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 shrink-0 ${
-                activeTab === 'scanner'
-                  ? 'bg-amber-500/15 text-amber-400 font-bold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Scan className="w-4 h-4 shrink-0" />
-              <span>Escáner</span>
-            </button>
-
-            {/* Historial Excel is visible for ESPECIAL_2 and MASTER */}
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 shrink-0 ${
-                activeTab === 'history'
-                  ? 'bg-amber-500/15 text-amber-400 font-bold'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Historial Excel</span>
-              <span className="sm:hidden">Historial</span>
-              <span className="font-mono text-[11px]">({scansCount})</span>
-            </button>
-
-            {/* Enlace SharePoint is EXCLUSIVE to MASTER */}
-            {userRole === 'MASTER' && (
-              <button
-                onClick={() => setActiveTab('powerautomate')}
-                className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 shrink-0 ${
-                  activeTab === 'powerautomate'
-                    ? 'bg-amber-500/15 text-amber-400 font-bold'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Workflow className="w-4 h-4 shrink-0" />
-                <span className="hidden sm:inline">Enlace SharePoint</span>
-                <span className="sm:hidden">SharePoint</span>
-              </button>
-            )}
+        {/* Zone 2: Desktop Shared-Element Navigation Tabs (hidden on APK and mobile where Bottom TabBar takes over) */}
+        {showWebNav && (
+          <nav
+            aria-label="Navegación principal"
+            className="hidden md:flex items-center gap-1 bg-slate-950/75 p-1 rounded-2xl border border-slate-800/90"
+          >
+            {navItems.map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveTab(item.id)}
+                  className={`relative px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                    isActive ? 'text-slate-950' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {isActive && (
+                    <motion.span
+                      layoutId="desktop-nav-pill"
+                      transition={{ type: 'spring', stiffness: 460, damping: 32 }}
+                      className="absolute inset-0 rounded-xl bg-amber-400 shadow-md"
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-1.5">
+                    {item.icon}
+                    <span>{item.label}</span>
+                    {item.badge !== undefined && (
+                      <span
+                        className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono tabular-nums ${
+                          isActive ? 'bg-slate-950/20 text-slate-950' : 'bg-slate-800 text-slate-300'
+                        }`}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
           </nav>
         )}
 
-        {/* Zone 3: Status / Role Info */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Quick CSV Export if in web/history */}
-          {userRole !== 'OPERADOR_APK' && !isRunningInApkOrStandalone() && scans.length > 0 && (
-            <button
-              onClick={() => exportScansToCsv(scans)}
-              title="Descargar copia Excel (.CSV)"
-              className="p-2 text-slate-300 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors hidden md:flex items-center shrink-0"
-            >
-              <Download className="w-4 h-4" />
-            </button>
-          )}
-
-          {/* Role Switcher Pill (Hidden as requested: APK vs Web is determined automatically) */}
-          <div className="hidden" aria-hidden="true">
-            {/* Oculto: el modo APK y Gerente se determinan por entorno sin cambio manual */}
-          </div>
-
-          {/* Guía Rápida Operativa (?) */}
+        {/* Zone 3: Quick Guide (?) & Master Role Indicator */}
+        <div className="flex items-center gap-2 shrink-0">
           {onOpenQuickGuide && (
-            <button
-              type="button"
-              onClick={onOpenQuickGuide}
-              title="Guía rápida operativa"
-              className="px-2 sm:px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-400 border border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
-            >
-              <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="hidden sm:inline">Guía</span>
-            </button>
+            <Tooltip content="Abrir guía rápida operativa" position="bottom">
+              <button
+                type="button"
+                onClick={onOpenQuickGuide}
+                className="h-9 px-2.5 sm:px-3 rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-200 hover:text-amber-400 border border-slate-700/80 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="hidden sm:inline">Guía</span>
+              </button>
+            </Tooltip>
           )}
 
-          {/* Master Indicator Badge (when Master is unlocked via 12 secret taps) */}
           {userRole === 'MASTER' && (
-            <button
-              onClick={onOpenMasterAuth}
-              className="px-2 sm:px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/40 text-[10px] sm:text-[11px] font-bold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0"
-              title="Panel de Enlaces Master (SharePoint y Supabase)"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-              <span>Master</span>
-            </button>
+            <Tooltip content="Panel Master (SharePoint y Supabase)" position="bottom">
+              <button
+                type="button"
+                onClick={onOpenMasterAuth}
+                className="h-9 px-2.5 sm:px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+                <span>Master</span>
+              </button>
+            </Tooltip>
           )}
         </div>
       </div>

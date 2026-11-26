@@ -14,6 +14,7 @@ const STORAGE_KEYS = {
   LAST_RESET_TIME: 'tc26_last_applied_reset_time_v1',
   LAST_REBOOT_TIME: 'tc26_last_applied_reboot_v2',
   AUTO_UPLOAD: 'tc26_auto_upload_v1',
+  AUTO_UPLOAD_DELAY_MS: 'tc26_auto_upload_delay_ms_v1',
 };
 
 export const DEFAULT_CONFIG: PowerAutomateConfig = {
@@ -228,6 +229,28 @@ export function saveAutoUploadMode(enabled: boolean): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEYS.AUTO_UPLOAD, String(enabled));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadAutoUploadDelayMs(): number {
+  if (typeof window === 'undefined') return 1500;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.AUTO_UPLOAD_DELAY_MS);
+    const num = raw ? Number(raw) : 1500;
+    if (Number.isFinite(num) && num >= 800 && num <= 3000) return num;
+  } catch {
+    // ignore
+  }
+  return 1500;
+}
+
+export function saveAutoUploadDelayMs(ms: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const clamped = Math.max(800, Math.min(3000, Math.round(ms)));
+    localStorage.setItem(STORAGE_KEYS.AUTO_UPLOAD_DELAY_MS, String(clamped));
   } catch {
     // ignore
   }

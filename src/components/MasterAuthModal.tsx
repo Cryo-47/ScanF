@@ -1,24 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  Lock, 
-  Workflow, 
-  Database, 
-  Check, 
-  Send, 
-  CheckCircle2, 
-  AlertTriangle, 
-  KeyRound, 
-  LogOut, 
-  ExternalLink,
+import { motion } from 'motion/react';
+import {
+  X,
+  Lock,
+  Workflow,
+  Database,
+  Check,
+  Send,
+  CheckCircle2,
+  AlertTriangle,
+  KeyRound,
+  LogOut,
   Copy,
-  Code
+  Code,
 } from 'lucide-react';
 import { UserRole, PowerAutomateConfig, SupabaseConfig } from '../types/inventory';
 import { loadMasterPin, saveMasterPin } from '../utils/storage';
 import { testPowerAutomateWebhook, testSupabaseConnection } from '../utils/syncService';
 import { soundManager } from '../utils/audioHaptics';
 import { SUPABASE_SQL_SCRIPT, SUPABASE_SHAREPOINT_SETTINGS_SQL } from '../utils/supabaseSql';
+import { Accordion, Switch, Tabs } from './ui/Controls';
+import { EASE_OUT_EXPO, FadeSlide, ShakeContainer, TactileButton } from './ui/MotionPrimitives';
+import { useToast } from './ui/ToastProvider';
 
 interface MasterAuthModalProps {
   isOpen: boolean;
@@ -45,15 +48,16 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
   onSyncAllToSupabase,
   scansCount = 0,
 }) => {
+  const { toast } = useToast();
   const [pinInput, setPinInput] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(userRole === 'MASTER');
   const [pinError, setPinError] = useState(false);
+  const [pinShakeCount, setPinShakeCount] = useState(0);
   const [activeMasterSection, setActiveMasterSection] = useState<'sharepoint' | 'supabase'>('sharepoint');
 
   // Change PIN state
   const [isChangingPin, setIsChangingPin] = useState(false);
   const [newPin, setNewPin] = useState('');
-  const [pinSavedMsg, setPinSavedMsg] = useState(false);
 
   // SharePoint form state
   const [paWebhookUrl, setPaWebhookUrl] = useState(powerAutomateConfig.webhookUrl);
@@ -61,24 +65,23 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
   const [paIsEnabled, setPaIsEnabled] = useState(powerAutomateConfig.isEnabled);
   const [paTesting, setPaTesting] = useState(false);
   const [paTestResult, setPaTestResult] = useState<{ success: boolean; message: string; latencyMs: number } | null>(null);
-  const [paSaved, setPaSaved] = useState(false);
   const [copiedSharepointSql, setCopiedSharepointSql] = useState(false);
 
   // Supabase form state
   const [isSyncingAll, setIsSyncingAll] = useState(false);
-  const [syncAllFeedback, setSyncAllFeedback] = useState<string | null>(null);
   const [sbUrl, setSbUrl] = useState(supabaseConfig.url);
   const [sbAnonKey, setSbAnonKey] = useState(supabaseConfig.anonKey);
   const [sbTableName, setSbTableName] = useState(supabaseConfig.tableName || 'inventory_scans');
   const [sbIsEnabled, setSbIsEnabled] = useState(supabaseConfig.isEnabled);
   const [sbTesting, setSbTesting] = useState(false);
   const [sbTestResult, setSbTestResult] = useState<{ success: boolean; message: string; latencyMs: number } | null>(null);
-  const [sbSaved, setSbSaved] = useState(false);
-  const [showSqlSchema, setShowSqlSchema] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
+      setIsAuthenticated(userRole === 'MASTER');
+      setPinError(false);
+      setPinInput('');
       setPaWebhookUrl(powerAutomateConfig.webhookUrl);
       setPaExcelDirectUrl(powerAutomateConfig.excelFileDirectUrl || '');
       setPaIsEnabled(powerAutomateConfig.isEnabled);
@@ -87,39 +90,41 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
       setSbTableName(supabaseConfig.tableName || 'inventory_scans');
       setSbIsEnabled(supabaseConfig.isEnabled);
     }
-  }, [isOpen, powerAutomateConfig, supabaseConfig]);
+  }, [isOpen, userRole, powerAutomateConfig, supabaseConfig]);
 
   if (!isOpen) return null;
 
   const storedPin = loadMasterPin();
+  const isWebhookUrlValid = !paWebhookUrl.trim() || /^https?:\/\//i.test(paWebhookUrl.trim());
+  const isSbUrlValid = !sbUrl.trim() || /^https?:\/\//i.test(sbUrl.trim());
 
   const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pinInput === storedPin || pinInput === '1234') {
+    if (pinInput === storedPin) {
       setIsAuthenticated(true);
       onSetUserRole('MASTER');
       setPinError(false);
       setPinInput('');
       soundManager.playSuccess();
+      toast({ title: 'Acceso Master habilitado', variant: 'success' });
     } else {
       setPinError(true);
+      setPinShakeCount((c) => c + 1);
       setPinInput('');
       soundManager.playError();
     }
   };
 
   const handleSavePin = () => {
-    if (newPin.length >= 4) {
-      saveMasterPin(newPin);
+    if (newPin.trim().length >= 4) {
+      saveMasterPin(newPin.trim());
       setIsChangingPin(false);
       setNewPin('');
       soundManager.playSuccess();
-      setPinSavedMsg(true);
-      setTimeout(() => setPinSavedMsg(false), 3000);
+      toast({ title: 'Nuevo PIN Master guardado', variant: 'success' });
     }
   };
 
-  // Test & Save SharePoint
   const handleTestSharepoint = async () => {
     if (!paWebhookUrl.trim()) {
       setPaTestResult({
@@ -134,11 +139,8 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
     try {
       const res = await testPowerAutomateWebhook(paWebhookUrl.trim());
       setPaTestResult(res);
-      if (res.success) {
-        soundManager.playSuccess();
-      } else {
-        soundManager.playError();
-      }
+      if (res.success) soundManager.playSuccess();
+      else soundManager.playError();
     } finally {
       setPaTesting(false);
     }
@@ -152,17 +154,15 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
       isEnabled: paIsEnabled && Boolean(paWebhookUrl.trim()),
     };
     onSavePowerAutomate(updated);
-    setPaSaved(true);
     soundManager.playSuccess();
-    setTimeout(() => setPaSaved(false), 2000);
+    toast({ title: 'Configuración SharePoint guardada en Supabase', variant: 'success' });
   };
 
-  // Test & Save Supabase
   const handleTestSupabase = async () => {
     if (!sbUrl.trim() || !sbAnonKey.trim()) {
       setSbTestResult({
         success: false,
-        message: 'Ingresa la URL del proyecto y la Anon Key de Supabase para probar la conexión.',
+        message: 'Ingresa la URL del proyecto y la Anon Key de Supabase para probar.',
         latencyMs: 0,
       });
       return;
@@ -172,11 +172,8 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
     try {
       const res = await testSupabaseConnection(sbUrl.trim(), sbAnonKey.trim(), sbTableName.trim());
       setSbTestResult(res);
-      if (res.success) {
-        soundManager.playSuccess();
-      } else {
-        soundManager.playError();
-      }
+      if (res.success) soundManager.playSuccess();
+      else soundManager.playError();
     } finally {
       setSbTesting(false);
     }
@@ -187,40 +184,38 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
       ...supabaseConfig,
       url: sbUrl.trim(),
       anonKey: sbAnonKey.trim(),
-      tableName: (sbTableName.trim() || 'inventory_scans'),
+      tableName: sbTableName.trim() || 'inventory_scans',
       isEnabled: sbIsEnabled && Boolean(sbUrl.trim() && sbAnonKey.trim()),
     };
     onSaveSupabase(updated);
-    setSbSaved(true);
     soundManager.playSuccess();
-    setTimeout(() => setSbSaved(false), 2000);
-  };
-
-  const sqlCode = SUPABASE_SQL_SCRIPT;
-
-  const handleCopySql = () => {
-    navigator.clipboard.writeText(sqlCode);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2000);
+    toast({ title: 'Configuración Supabase guardada', variant: 'success' });
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.24, ease: EASE_OUT_EXPO }}
+        className="glass-surface-strong border border-slate-700/80 rounded-2xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto"
+      >
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors"
+          aria-label="Cerrar"
+          className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
         </button>
 
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center text-amber-400 shrink-0">
             <Lock className="w-5 h-5" />
           </div>
           <div>
             <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
-              Configuración de Enlaces - Usuario Master
+              Configuración de Enlaces — Usuario Master
             </h2>
             <p className="text-xs text-slate-400">
               Administración exclusiva de conexiones con SharePoint y Supabase
@@ -229,98 +224,84 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
         </div>
 
         {!isAuthenticated ? (
-          /* Step 1: PIN Input */
-          <form onSubmit={handleVerifyPin} className="space-y-4 max-w-sm mx-auto py-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 text-center">
-                Ingresa el PIN de Usuario Master:
-              </label>
-              <input
-                type="password"
-                maxLength={6}
-                value={pinInput}
-                onChange={(e) => {
-                  setPinInput(e.target.value);
-                  setPinError(false);
-                }}
-                placeholder="••••"
-                className="w-full h-12 bg-slate-950 border border-slate-700 focus:border-amber-400 rounded-xl px-4 text-center text-2xl font-mono tracking-widest text-white focus:outline-none transition-colors"
-                autoFocus
-              />
-              {pinError && (
-                <p className="text-xs text-rose-400 mt-1.5 text-center font-medium">
-                  PIN incorrecto. (PIN por defecto: 1234)
-                </p>
-              )}
-            </div>
+          <ShakeContainer shakeKey={pinShakeCount}>
+            <form onSubmit={handleVerifyPin} className="space-y-4 max-w-sm mx-auto py-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5 text-center">
+                  Ingresa el PIN de Usuario Master:
+                </label>
+                <input
+                  type="password"
+                  maxLength={6}
+                  value={pinInput}
+                  onChange={(e) => {
+                    setPinInput(e.target.value);
+                    setPinError(false);
+                  }}
+                  placeholder="••••"
+                  className={`w-full h-12 bg-slate-950 border rounded-xl px-4 text-center text-2xl font-mono tracking-widest text-white focus:outline-none transition-colors ${
+                    pinError ? 'border-rose-500' : 'border-slate-700 focus:border-amber-400'
+                  }`}
+                  autoFocus
+                />
+                {pinError && (
+                  <p className="text-xs text-rose-400 mt-1.5 text-center font-medium">
+                    PIN incorrecto. Verifica tu clave de acceso Master.
+                  </p>
+                )}
+              </div>
 
-            <button
-              type="submit"
-              className="w-full h-12 bg-amber-500 hover:bg-amber-400 active:scale-[0.98] text-slate-950 font-bold text-sm rounded-xl transition-all shadow-md"
-            >
-              Acceder a Configuraciones Master
-            </button>
-            <p className="text-[11px] text-slate-500 text-center">
-              Acceso protegido. Recuerda que el control de rondas es operado por el Gerente.
-            </p>
-          </form>
+              <TactileButton
+                type="submit"
+                anticipation
+                className="w-full h-12 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm rounded-xl transition-colors shadow-md cursor-pointer"
+              >
+                Acceder a Configuraciones Master
+              </TactileButton>
+            </form>
+          </ShakeContainer>
         ) : (
-          /* Step 2: Master Configuration Tabs: SharePoint vs Supabase */
-          <div className="space-y-5">
-            {/* Master Navigation Tabs */}
-            <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-              <button
-                onClick={() => setActiveMasterSection('sharepoint')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                  activeMasterSection === 'sharepoint'
-                    ? 'bg-blue-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Workflow className="w-4 h-4 shrink-0" />
-                <span>1. Conexión con SharePoint</span>
-              </button>
+          <div className="space-y-4">
+            <Tabs
+              layoutGroup="master-modal-tabs"
+              value={activeMasterSection}
+              onChange={setActiveMasterSection}
+              items={[
+                { id: 'sharepoint', label: '1. SharePoint', icon: <Workflow className="w-3.5 h-3.5" /> },
+                { id: 'supabase', label: '2. Supabase', icon: <Database className="w-3.5 h-3.5" /> },
+              ]}
+            />
 
-              <button
-                onClick={() => setActiveMasterSection('supabase')}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                  activeMasterSection === 'supabase'
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Database className="w-4 h-4 shrink-0" />
-                <span>2. Conexión con Supabase</span>
-              </button>
-            </div>
-
-            {/* TAB 1: SHAREPOINT (POWER AUTOMATE) */}
             {activeMasterSection === 'sharepoint' && (
-              <div className="space-y-4 animate-in fade-in duration-100">
-                <div className="p-3 bg-blue-950/20 border border-blue-500/30 rounded-xl text-xs text-blue-300">
-                  <strong>Conexión Power Automate ➔ SharePoint Excel:</strong> Permite que cada escaneo se divida automáticamente entre la Hoja 1 (Conteo 1), Hoja 2 (Conteo 2) y Hoja 3 (Conteo 3) de tu archivo Excel.
-                </div>
-
+              <FadeSlide className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    URL del Webhook de Power Automate (HTTP POST):
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-300">
+                      URL del Webhook de Power Automate (HTTP POST):
+                    </label>
+                    {!isWebhookUrlValid && (
+                      <span className="text-[10px] text-rose-400 font-semibold">Debe iniciar con https://</span>
+                    )}
+                  </div>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="url"
                       value={paWebhookUrl}
                       onChange={(e) => setPaWebhookUrl(e.target.value)}
                       placeholder="https://prod-XX.westus.logic.azure.com:443/workflows/..."
-                      className="flex-1 h-11 bg-slate-950 border border-slate-700 rounded-xl px-3 font-mono text-xs text-amber-300 placeholder:text-slate-600 focus:outline-none focus:border-amber-400"
+                      className={`flex-1 h-11 bg-slate-950 border rounded-xl px-3 font-mono text-xs text-amber-300 placeholder:text-slate-600 focus:outline-none ${
+                        !isWebhookUrlValid ? 'border-rose-500' : 'border-slate-700 focus:border-amber-400'
+                      }`}
                     />
-                    <button
+                    <TactileButton
+                      type="button"
                       onClick={handleTestSharepoint}
                       disabled={paTesting}
-                      className="h-11 px-4 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 whitespace-nowrap shadow-md transition-all shrink-0"
+                      className="h-11 px-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 whitespace-nowrap shadow-md shrink-0 cursor-pointer"
                     >
                       <Send className={`w-3.5 h-3.5 ${paTesting ? 'animate-bounce' : ''}`} />
                       <span>{paTesting ? 'Probando...' : 'Probar Conexión'}</span>
-                    </button>
+                    </TactileButton>
                   </div>
                 </div>
 
@@ -339,21 +320,6 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="font-bold break-words">{paTestResult.message}</div>
-                      {paTestResult.message.includes('DirectApiAuthorizationRequired') && (
-                        <div className="mt-2.5 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[11px] text-amber-200 leading-relaxed space-y-1.5">
-                          <div className="font-bold text-amber-300 flex items-center gap-1.5">
-                            <span>💡</span>
-                            <span>Cómo solucionar este error en Power Automate:</span>
-                          </div>
-                          <ol className="list-decimal pl-4 space-y-1 text-slate-300">
-                            <li>Abre tu flujo en <strong>Power Automate</strong> y haz clic en el bloque disparador <strong>"Cuando se recibe una solicitud HTTP"</strong> (manual).</li>
-                            <li>En el campo <strong>"¿Quién puede desencadenar el flujo?"</strong>, confirma que esté seleccionado <strong>"Cualquiera"</strong>.</li>
-                            <li>Haz clic en el botón <strong>Guardar (Save)</strong> arriba a la derecha.</li>
-                            <li><strong>Importante:</strong> Al guardar con "Cualquiera", Power Automate regenera la URL y le agrega al final la clave de firma secreta (<code className="text-amber-400 font-mono font-bold">&amp;sig=...</code>).</li>
-                            <li>Vuelve a copiar esa nueva URL completa con su firma, pégala en el campo de arriba y haz clic en <em>"Guardar Configuración"</em> y luego en <em>"Probar Conexión"</em>.</li>
-                          </ol>
-                        </div>
-                      )}
                       {paTestResult.latencyMs > 0 && (
                         <div className="font-mono text-[10px] text-slate-400 mt-1">
                           Latencia: {paTestResult.latencyMs} ms
@@ -374,142 +340,102 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
                     placeholder="https://tuempresa.sharepoint.com/:x:/r/..."
                     className="w-full h-10 bg-slate-950 border border-slate-700 rounded-xl px-3 text-xs font-mono text-emerald-300 focus:outline-none focus:border-emerald-400"
                   />
-                  <p className="text-[10px] text-slate-500 mt-0.5">
-                    Este link es el que usará el Gerente para abrir el Excel con un solo clic.
-                  </p>
                 </div>
 
-                <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={paIsEnabled}
-                      onChange={(e) => setPaIsEnabled(e.target.checked)}
-                      className="w-4 h-4 rounded text-blue-500 bg-slate-800 border-slate-700"
-                    />
-                    <span className="text-xs text-slate-300">
-                      Sincronización activa con SharePoint
-                    </span>
-                  </label>
-
-                  <div className="flex items-center gap-2">
-                    {paSaved && (
-                      <span className="text-xs text-emerald-400 flex items-center gap-1 font-semibold">
-                        <Check className="w-3.5 h-3.5" /> Guardado permanente en Supabase
-                      </span>
-                    )}
-                    <button
-                      onClick={handleSaveSharepoint}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95"
-                    >
-                      Guardar Configuración SharePoint
-                    </button>
-                  </div>
+                <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                  <Switch
+                    checked={paIsEnabled}
+                    onChange={setPaIsEnabled}
+                    tone="blue"
+                    label="Sincronización activa con SharePoint"
+                  />
+                  <TactileButton
+                    type="button"
+                    onClick={handleSaveSharepoint}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer"
+                  >
+                    Guardar SharePoint
+                  </TactileButton>
                 </div>
 
-                {/* Box indicating permanent Supabase storage */}
-                <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
-                      <Code className="w-3.5 h-3.5 text-blue-400" />
-                      <span>Tabla Supabase: <code className="text-blue-300 font-mono">public.sharepoint_settings</code></span>
-                    </div>
+                <Accordion
+                  title="Script SQL: Tabla sharepoint_settings"
+                  subtitle="Guarda automáticamente el link en la nube para todas las TC26"
+                >
+                  <div className="space-y-2 pt-2">
                     <button
+                      type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(SUPABASE_SHAREPOINT_SETTINGS_SQL);
                         setCopiedSharepointSql(true);
                         soundManager.playSuccess();
                         setTimeout(() => setCopiedSharepointSql(false), 2000);
                       }}
-                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] font-semibold rounded-lg flex items-center gap-1 transition-all border border-slate-700"
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold rounded-lg flex items-center gap-1.5 border border-slate-700 cursor-pointer"
                     >
-                      {copiedSharepointSql ? (
-                        <>
-                          <Check className="w-3 h-3 text-emerald-400" /> Copiado
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3 h-3 text-slate-400" /> Copiar SQL Tabla SharePoint
-                        </>
-                      )}
+                      {copiedSharepointSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedSharepointSql ? 'Copiado' : 'Copiar SQL'}</span>
                     </button>
+                    <pre className="text-[10px] font-mono text-slate-400 overflow-x-auto p-2 bg-slate-900 rounded border border-slate-800 max-h-28">
+                      {SUPABASE_SHAREPOINT_SETTINGS_SQL}
+                    </pre>
                   </div>
-                  <p className="text-[10px] text-slate-400 leading-normal">
-                    La URL de Power Automate y el enlace del archivo Excel se guardan automáticamente en Supabase para sincronizarse con todas las terminales TC26 sin tener que configurarlas manualmente.
-                  </p>
-                </div>
-              </div>
+                </Accordion>
+              </FadeSlide>
             )}
 
-            {/* TAB 2: SUPABASE */}
             {activeMasterSection === 'supabase' && (
-              <div className="space-y-4 animate-in fade-in duration-100">
-                <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-xs text-emerald-300">
-                  <strong>Registro y Base de Datos Supabase (PostgreSQL):</strong> Guarda una copia de respaldo instantánea de cada escaneo en una tabla SQL en la nube.
-                </div>
-
+              <FadeSlide className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-300 mb-1">
-                      URL del Proyecto Supabase:
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-slate-300">URL Supabase:</label>
+                      {!isSbUrlValid && <span className="text-[10px] text-rose-400">URL inválida</span>}
+                    </div>
                     <input
                       type="url"
                       value={sbUrl}
                       onChange={(e) => setSbUrl(e.target.value)}
                       placeholder="https://xyzabcdefg.supabase.co"
-                      className="w-full h-10 bg-slate-950 border border-slate-700 rounded-xl px-3 font-mono text-xs text-emerald-300 placeholder:text-slate-600 focus:outline-none focus:border-emerald-400"
+                      className={`w-full h-10 bg-slate-950 border rounded-xl px-3 font-mono text-xs text-emerald-300 focus:outline-none ${
+                        !isSbUrlValid ? 'border-rose-500' : 'border-slate-700 focus:border-emerald-400'
+                      }`}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-300 mb-1">
-                      Nombre de la Tabla:
-                    </label>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Tabla:</label>
                     <input
                       type="text"
                       value={sbTableName}
                       onChange={(e) => setSbTableName(e.target.value)}
                       placeholder="inventory_scans"
-                      className="w-full h-10 bg-slate-950 border border-slate-700 rounded-xl px-3 font-mono text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-emerald-400"
+                      className="w-full h-10 bg-slate-950 border border-slate-700 rounded-xl px-3 font-mono text-xs text-white focus:outline-none focus:border-emerald-400"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Supabase Anon Key / Public Key:
-                  </label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Supabase Anon Key:</label>
                   <input
                     type="password"
                     value={sbAnonKey}
                     onChange={(e) => setSbAnonKey(e.target.value)}
                     placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                    className="w-full h-10 bg-slate-950 border border-slate-700 rounded-xl px-3 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emerald-400"
+                    className="w-full h-10 bg-slate-950 border border-slate-700 rounded-xl px-3 font-mono text-xs text-slate-200 focus:outline-none focus:border-emerald-400"
                   />
-                  <p className="text-[10px] text-slate-500 mt-0.5">
-                    Se encuentra en Supabase en: Project Settings &gt; API &gt; Project API keys (anon / public).
-                  </p>
                 </div>
 
-                {/* Test button & status */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                  <button
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <TactileButton
+                    type="button"
                     onClick={handleTestSupabase}
                     disabled={sbTesting}
-                    className="h-10 px-4 bg-slate-800 hover:bg-slate-700 active:scale-95 text-emerald-400 border border-emerald-500/30 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all"
+                    className="h-10 px-4 bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer"
                   >
                     <Send className={`w-3.5 h-3.5 ${sbTesting ? 'animate-bounce' : ''}`} />
-                    <span>{sbTesting ? 'Verificando con Supabase...' : 'Probar Conexión Supabase'}</span>
-                  </button>
-
-                  <button
-                    onClick={() => setShowSqlSchema(!showSqlSchema)}
-                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
-                  >
-                    <Code className="w-3.5 h-3.5 text-amber-400" />
-                    <span>{showSqlSchema ? 'Ocultar SQL' : 'Ver Script SQL para Supabase'}</span>
-                  </button>
+                    <span>{sbTesting ? 'Verificando...' : 'Probar Conexión Supabase'}</span>
+                  </TactileButton>
                 </div>
 
                 {sbTestResult && (
@@ -536,114 +462,96 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
                   </div>
                 )}
 
-                {/* Optional SQL schema viewer */}
-                {showSqlSchema && (
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between text-xs text-slate-300">
-                      <span className="font-semibold text-amber-400">Ejecuta esto en el SQL Editor de Supabase:</span>
-                      <button
-                        onClick={handleCopySql}
-                        className="px-2 py-0.5 rounded bg-slate-800 text-[11px] text-slate-300 hover:text-white flex items-center gap-1"
-                      >
-                        {copiedSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedSql ? 'Copiado' : 'Copiar'}</span>
-                      </button>
-                    </div>
-                    <pre className="text-[10px] font-mono text-slate-400 overflow-x-auto p-2 bg-slate-900 rounded max-h-32 border border-slate-800">
-                      {sqlCode}
-                    </pre>
-                  </div>
-                )}
-
-                {/* Manual backup of local scans to Supabase */}
-                {onSyncAllToSupabase && (
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-slate-300">
-                        Respaldar Escaneos Locales en Supabase:
-                      </span>
-                      <span className="text-[11px] font-mono text-emerald-400 font-bold">
-                        {scansCount || 0} registros en memoria
-                      </span>
-                    </div>
+                <Accordion
+                  title={
+                    <span className="flex items-center gap-1.5">
+                      <Code className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Script SQL completo de tablas Supabase</span>
+                    </span>
+                  }
+                >
+                  <div className="space-y-2 pt-2">
                     <button
                       type="button"
-                      onClick={async () => {
-                        setIsSyncingAll(true);
-                        setSyncAllFeedback(null);
-                        try {
-                          const count = await onSyncAllToSupabase();
-                          setSyncAllFeedback(`✓ ${count} códigos guardados y respaldados exitosamente en la nube de Supabase.`);
-                          soundManager.playSuccess();
-                        } catch {
-                          setSyncAllFeedback('Error al respaldar escaneos en Supabase.');
-                          soundManager.playError();
-                        } finally {
-                          setIsSyncingAll(false);
-                        }
+                      onClick={() => {
+                        navigator.clipboard.writeText(SUPABASE_SQL_SCRIPT);
+                        setCopiedSql(true);
+                        setTimeout(() => setCopiedSql(false), 2000);
                       }}
-                      disabled={isSyncingAll || !sbIsEnabled}
-                      className="w-full py-2.5 px-3 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 font-bold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm"
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 text-[11px] text-slate-300 hover:text-white flex items-center gap-1 cursor-pointer"
                     >
-                      <Database className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAll ? 'animate-spin' : ''}`} />
-                      <span>{isSyncingAll ? 'Guardando en Supabase...' : 'Guardar y Respaldar Todos los Códigos en Supabase Ahora'}</span>
+                      {copiedSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedSql ? 'Copiado' : 'Copiar SQL'}</span>
                     </button>
-                    {syncAllFeedback && (
-                      <p className="text-[11px] text-emerald-400 font-mono mt-1">
-                        {syncAllFeedback}
-                      </p>
-                    )}
+                    <pre className="text-[10px] font-mono text-slate-400 overflow-x-auto p-2 bg-slate-900 rounded max-h-32 border border-slate-800">
+                      {SUPABASE_SQL_SCRIPT}
+                    </pre>
                   </div>
+                </Accordion>
+
+                {onSyncAllToSupabase && (
+                  <TactileButton
+                    type="button"
+                    onClick={async () => {
+                      setIsSyncingAll(true);
+                      try {
+                        const count = await onSyncAllToSupabase();
+                        soundManager.playSuccess();
+                        toast({
+                          title: `${count} códigos respaldados en Supabase`,
+                          variant: 'success',
+                        });
+                      } catch {
+                        soundManager.playError();
+                        toast({
+                          title: 'Error al respaldar escaneos en Supabase',
+                          variant: 'error',
+                        });
+                      } finally {
+                        setIsSyncingAll(false);
+                      }
+                    }}
+                    disabled={isSyncingAll || !sbIsEnabled}
+                    className="w-full py-2.5 px-3 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 font-bold text-xs rounded-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <Database className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAll ? 'animate-spin' : ''}`} />
+                    <span>
+                      {isSyncingAll
+                        ? 'Guardando en Supabase...'
+                        : `Respaldar ${scansCount} códigos locales en Supabase`}
+                    </span>
+                  </TactileButton>
                 )}
 
-                <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={sbIsEnabled}
-                      onChange={(e) => setSbIsEnabled(e.target.checked)}
-                      className="w-4 h-4 rounded text-emerald-500 bg-slate-800 border-slate-700"
-                    />
-                    <span className="text-xs text-slate-300">
-                      Habilitar sincronización con Supabase
-                    </span>
-                  </label>
-
-                  <div className="flex items-center gap-2">
-                    {sbSaved && (
-                      <span className="text-xs text-emerald-400 flex items-center gap-1">
-                        <Check className="w-3.5 h-3.5" /> Guardado
-                      </span>
-                    )}
-                    <button
-                      onClick={handleSaveSupabase}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95"
-                    >
-                      Guardar Configuración Supabase
-                    </button>
-                  </div>
+                <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                  <Switch
+                    checked={sbIsEnabled}
+                    onChange={setSbIsEnabled}
+                    tone="emerald"
+                    label="Habilitar sincronización con Supabase"
+                  />
+                  <TactileButton
+                    type="button"
+                    onClick={handleSaveSupabase}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer"
+                  >
+                    Guardar Supabase
+                  </TactileButton>
                 </div>
-              </div>
+              </FadeSlide>
             )}
 
-            {/* Footer with PIN Management & Logout */}
+            {/* Footer PIN Management & Logout */}
             <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
               {!isChangingPin ? (
-                <div className="flex items-center gap-2.5">
-                  <button
-                    onClick={() => setIsChangingPin(true)}
-                    className="text-[11px] text-slate-400 hover:text-amber-400 underline flex items-center gap-1"
-                  >
-                    <KeyRound className="w-3.5 h-3.5" />
-                    <span>Cambiar PIN Master</span>
-                  </button>
-                  {pinSavedMsg && (
-                    <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Nuevo PIN guardado</span>
-                    </span>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsChangingPin(true)}
+                  className="text-[11px] text-slate-400 hover:text-amber-400 underline flex items-center gap-1 cursor-pointer"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>Cambiar PIN Master</span>
+                </button>
               ) : (
                 <div className="flex gap-1.5 items-center">
                   <input
@@ -651,18 +559,21 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
                     maxLength={6}
                     value={newPin}
                     onChange={(e) => setNewPin(e.target.value)}
-                    placeholder="Nuevo PIN"
-                    className="w-24 h-7 bg-slate-950 border border-slate-700 rounded px-2 text-xs text-center text-white"
+                    placeholder="Nuevo PIN (4+)"
+                    className="w-28 h-8 bg-slate-950 border border-slate-700 rounded-lg px-2 text-xs text-center text-white"
                   />
                   <button
+                    type="button"
+                    disabled={newPin.trim().length < 4}
                     onClick={handleSavePin}
-                    className="h-7 px-2.5 bg-amber-500 text-slate-950 font-bold text-xs rounded"
+                    className="h-8 px-2.5 bg-amber-500 text-slate-950 font-bold text-xs rounded-lg disabled:opacity-40 cursor-pointer"
                   >
                     Guardar
                   </button>
                   <button
+                    type="button"
                     onClick={() => setIsChangingPin(false)}
-                    className="text-xs text-slate-400 hover:text-white px-1"
+                    className="text-xs text-slate-400 hover:text-white px-1 cursor-pointer"
                   >
                     ✕
                   </button>
@@ -670,12 +581,13 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
               )}
 
               <button
+                type="button"
                 onClick={() => {
                   setIsAuthenticated(false);
                   onSetUserRole('GERENTE');
                   onClose();
                 }}
-                className="text-slate-400 hover:text-rose-400 flex items-center gap-1 text-[11px] transition-colors"
+                className="text-slate-400 hover:text-rose-400 flex items-center gap-1 text-[11px] transition-colors cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Cerrar Sesión Master</span>
@@ -683,7 +595,7 @@ export const MasterAuthModal: React.FC<MasterAuthModalProps> = ({
             </div>
           </div>
         )}
-      </div>
+      </motion.div>
     </div>
   );
 };

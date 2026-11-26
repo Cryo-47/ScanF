@@ -1,20 +1,25 @@
 import React, { useState } from 'react';
-import { 
-  Users, 
-  ArrowRight, 
-  RotateCcw, 
-  CheckCircle2, 
-  Layers, 
-  UserCheck, 
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Users,
+  ArrowRight,
+  RotateCcw,
+  UserCheck,
   Sparkles,
-  AlertCircle,
-  Clock,
   ArrowUpRight,
-  X
+  X,
 } from 'lucide-react';
 import { CountRound, ScannedItem, DeviceStatusSummary } from '../types/inventory';
 import { soundManager } from '../utils/audioHaptics';
 import { normalizeRound } from '../utils/storage';
+import { Badge, Tabs, Tooltip, TabItem } from './ui/Controls';
+import {
+  EASE_OUT_EXPO,
+  StaggerItem,
+  StaggerList,
+  TactileButton,
+} from './ui/MotionPrimitives';
+import { useToast } from './ui/ToastProvider';
 
 interface GerenteUserAssignmentPanelProps {
   currentRound: CountRound;
@@ -30,7 +35,6 @@ interface GerenteUserAssignmentPanelProps {
 }
 
 export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProps> = ({
-  currentRound,
   userRounds,
   onSetUserRound,
   onSetAllUsersRound,
@@ -38,43 +42,32 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
   deviceSummaries,
   onResetUserDevice,
 }) => {
-  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const { toast } = useToast();
   const [filterRound, setFilterRound] = useState<CountRound | 'ALL'>('ALL');
   const [confirmResetUserNum, setConfirmResetUserNum] = useState<number | null>(null);
 
-  const showFeedback = (msg: string) => {
-    setFeedbackMsg(msg);
-    setTimeout(() => setFeedbackMsg(null), 3500);
-  };
-
-  // Aggregate stats per user number (1 to 14)
   const usersData = Array.from({ length: 14 }, (_, i) => {
     const userNum = i + 1;
     const userLabel = `Usuario ${userNum}`;
-    
-    // Scans matching this user number
+
     const userScans = scans.filter(
       (s) => s.userNumber === userNum || s.operador === userLabel
     );
     const round1Scans = userScans.filter((s) => normalizeRound(s.conteoRound) === '1ER_CONTEO');
     const round2Scans = userScans.filter((s) => normalizeRound(s.conteoRound) === '2DO_CONTEO');
     const round3Scans = userScans.filter((s) => normalizeRound(s.conteoRound) === '3ER_CONTEO');
-    
+
     const round1Pieces = round1Scans.reduce((sum, s) => sum + s.cantidad, 0);
     const round2Pieces = round2Scans.reduce((sum, s) => sum + s.cantidad, 0);
     const round3Pieces = round3Scans.reduce((sum, s) => sum + s.cantidad, 0);
 
-    // Operator name from recent scans or device summary
     const matchingDevice = deviceSummaries.find(
       (d) => d.userNumber === userNum || d.operatorName?.includes(userLabel)
     );
-    const operatorName = 
-      userScans[0]?.nombreOperadorCompleto || 
-      matchingDevice?.operatorName || 
+    const operatorName =
+      userScans[0]?.nombreOperadorCompleto ||
+      matchingDevice?.operatorName ||
       'Sin operador asignado';
-
-    const lastActive = userScans[0]?.timestamp || matchingDevice?.lastActive;
-    const lastSku = userScans[0]?.sku || matchingDevice?.lastSku;
 
     const round: CountRound = userRounds[userNum] || '1ER_CONTEO';
 
@@ -89,9 +82,6 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
       round2ScansCount: round2Scans.length,
       round3Pieces,
       round3ScansCount: round3Scans.length,
-      hasActivity: userScans.length > 0,
-      lastActive,
-      lastSku,
     };
   });
 
@@ -99,40 +89,68 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
   const inRound2Count = usersData.filter((u) => u.round === '2DO_CONTEO').length;
   const inRound3Count = usersData.filter((u) => u.round === '3ER_CONTEO').length;
 
+  const filterTabs: TabItem<CountRound | 'ALL'>[] = [
+    { id: 'ALL', label: 'Todos', badge: usersData.length },
+    { id: '1ER_CONTEO', label: '1er Conteo', badge: inRound1Count },
+    { id: '2DO_CONTEO', label: '2do Conteo', badge: inRound2Count },
+    ...(inRound3Count > 0
+      ? [{ id: '3ER_CONTEO' as const, label: '3er Conteo', badge: inRound3Count }]
+      : []),
+  ];
+
   const handleAdvanceIndividual = (userNum: number) => {
     soundManager.playSuccess();
     onSetUserRound(userNum, '2DO_CONTEO');
-    showFeedback(`✓ Usuario ${userNum} avanzado al 2do Conteo de forma individual.`);
+    toast({
+      variant: 'success',
+      title: `Usuario ${userNum} en 2do Conteo`,
+      description: 'Su terminal TC26 ya registra en la Hoja 2 de SharePoint.',
+    });
   };
 
   const handleRevertIndividual = (userNum: number) => {
     soundManager.playWarning();
     onSetUserRound(userNum, '1ER_CONTEO');
-    showFeedback(`↩ Usuario ${userNum} regresado al 1er Conteo.`);
+    toast({
+      variant: 'info',
+      title: `Usuario ${userNum} regresado a 1er Conteo`,
+    });
   };
 
   const handleAdvanceToRound3 = (userNum: number) => {
     soundManager.playSuccess();
     onSetUserRound(userNum, '3ER_CONTEO');
-    showFeedback(`⚡ Usuario ${userNum} asignado a 3er Conteo Extraordinario.`);
+    toast({
+      variant: 'warning',
+      title: `Usuario ${userNum} asignado a 3er Conteo`,
+      description: 'Habilitado para desempate de discrepancias.',
+    });
   };
 
   const handleAdvanceAllToRound2 = () => {
     soundManager.playSuccess();
     onSetAllUsersRound('2DO_CONTEO');
-    showFeedback('✓ Todos los usuarios (1 al 14) han avanzado al 2do Conteo.');
+    toast({
+      variant: 'success',
+      title: 'Todos los usuarios (1–14) en 2do Conteo',
+    });
   };
 
   const handleRevertAllToRound1 = () => {
     soundManager.playWarning();
     onSetAllUsersRound('1ER_CONTEO');
-    showFeedback('↩ Todos los usuarios (1 al 14) regresados al 1er Conteo.');
+    toast({
+      variant: 'info',
+      title: 'Todos los usuarios regresados a 1er Conteo',
+    });
   };
 
+  const visibleUsers = usersData.filter((u) => filterRound === 'ALL' || u.round === filterRound);
+
   return (
-    <div className="bg-slate-900 border-2 border-indigo-500/40 rounded-2xl p-4 sm:p-5 shadow-lg space-y-4">
+    <section className="glass-surface rounded-2xl p-4 sm:p-5 border border-slate-800/90 space-y-4">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
             <Users className="w-5 h-5" />
@@ -140,257 +158,182 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-base font-bold text-white tracking-tight">
-                Asignación de Usuarios para el 2do Conteo
+                Asignación Individual de 14 Usuarios
               </h3>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                {inRound1Count} en 1er Conteo
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                {inRound2Count} en 2do Conteo
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                {inRound3Count} en 3er Conteo
-              </span>
+              <Badge tone="emerald">{inRound1Count} en R1</Badge>
+              <Badge tone="blue">{inRound2Count} en R2</Badge>
+              {inRound3Count > 0 && <Badge tone="amber">{inRound3Count} en R3</Badge>}
             </div>
-            <p className="text-xs text-slate-400">
-              Avanza a cada usuario (1 al 14) al 2do conteo de manera individual conforme terminen su área, sin esperar a los demás.
+            <p className="text-xs text-slate-400 mt-0.5">
+              Avanza a cada operario al 2do o 3er conteo conforme termine su zona, sin esperar al resto.
             </p>
           </div>
         </div>
 
-        {/* Bulk Action Buttons */}
+        {/* Bulk Actions */}
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={handleAdvanceAllToRound2}
-            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-950/80 hover:bg-blue-900 text-blue-300 border border-blue-500/40 hover:border-blue-400 transition-colors flex items-center gap-1.5"
-            title="Avanzar a todos los usuarios al 2do Conteo"
-          >
-            <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>Avanzar Todos a 2do Conteo</span>
-          </button>
-          <button
-            onClick={handleRevertAllToRound1}
-            className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 transition-colors"
-            title="Regresar a todos al 1er Conteo"
-          >
-            Reiniciar Todos a 1er Conteo
-          </button>
-        </div>
-      </div>
-
-      {/* Explanatory Banner on Individual Progression */}
-      <div className="p-3.5 rounded-xl bg-slate-950 border border-indigo-500/30 flex items-start gap-3">
-        <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-        <div className="text-xs text-slate-300 leading-relaxed space-y-1">
-          <p>
-            <strong>Avance Individual Independiente:</strong> Cada operario que termine de contar su pasillo o rack en el <strong>1er Conteo</strong> puede ser avanzado inmediatamente al <strong>2do Conteo</strong> usando el botón azul de su tarjeta.
-          </p>
-          <p className="text-slate-400 text-[11px]">
-            Los demás operadores continuarán en el 1er conteo sin interrupción. Sus escaneos se clasificarán automáticamente en la hoja o tabla correspondiente en Excel de SharePoint (TablaConteo1 vs TablaConteo2).
-          </p>
-        </div>
-      </div>
-
-      {/* Feedback Toast */}
-      {feedbackMsg && (
-        <div className="p-2.5 bg-indigo-950/70 border border-indigo-500/40 text-indigo-200 text-xs rounded-xl flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{feedbackMsg}</span>
-        </div>
-      )}
-
-      {/* Quick Filter Tabs for 14 Users */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1 border-t border-slate-800/80">
-        <div className="flex flex-wrap items-center gap-1.5 text-xs font-mono">
-          <span className="text-slate-400 text-[11px] mr-1 font-sans">Ver:</span>
-          <button
-            type="button"
-            onClick={() => setFilterRound('ALL')}
-            className={`px-3 py-1 rounded-lg border text-xs transition-all cursor-pointer ${
-              filterRound === 'ALL'
-                ? 'bg-indigo-600 text-white border-indigo-500 font-bold shadow-sm'
-                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
-            }`}
-          >
-            Todos ({usersData.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterRound('1ER_CONTEO')}
-            className={`px-3 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-              filterRound === '1ER_CONTEO'
-                ? 'bg-emerald-950 text-emerald-300 border-emerald-500 font-bold shadow-sm'
-                : 'bg-slate-950 text-emerald-400/80 border-slate-800 hover:border-emerald-500/50'
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>1er Conteo ({inRound1Count})</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterRound('2DO_CONTEO')}
-            className={`px-3 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-              filterRound === '2DO_CONTEO'
-                ? 'bg-blue-950 text-blue-300 border-blue-500 font-bold shadow-sm'
-                : 'bg-slate-950 text-blue-400/80 border-slate-800 hover:border-blue-500/50'
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full bg-blue-400" />
-            <span>2do Conteo ({inRound2Count})</span>
-          </button>
-          {inRound3Count > 0 && (
-            <button
+          <Tooltip content="Mueve simultáneamente a los 14 usuarios al 2do Conteo">
+            <TactileButton
               type="button"
-              onClick={() => setFilterRound('3ER_CONTEO')}
-              className={`px-3 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-                filterRound === '3ER_CONTEO'
-                  ? 'bg-amber-950 text-amber-300 border-amber-500 font-bold shadow-sm'
-                  : 'bg-slate-950 text-amber-400/80 border-slate-800 hover:border-amber-500/50'
-              }`}
+              onClick={handleAdvanceAllToRound2}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/40 flex items-center gap-1.5 cursor-pointer"
             >
-              <span className="w-2 h-2 rounded-full bg-amber-400" />
-              <span>3er Conteo ({inRound3Count})</span>
-            </button>
-          )}
-        </div>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+              <span>Avanzar Todos a R2</span>
+            </TactileButton>
+          </Tooltip>
 
-        <div className="text-[11px] text-slate-400 font-mono">
-          Mostrando {filterRound === 'ALL' ? usersData.length : usersData.filter(u => u.round === filterRound).length} de 14 usuarios
+          <Tooltip content="Regresa a los 14 usuarios al 1er Conteo">
+            <TactileButton
+              type="button"
+              onClick={handleRevertAllToRound1}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer"
+            >
+              Reiniciar Todos a R1
+            </TactileButton>
+          </Tooltip>
         </div>
       </div>
 
-      {/* 14 User Cards Grid (Spacious 1 to 4 Columns, Never Squished) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {usersData
-          .filter((u) => filterRound === 'ALL' || u.round === filterRound)
-          .map((u) => {
-            const isRound2 = u.round === '2DO_CONTEO';
-            const isRound3 = u.round === '3ER_CONTEO';
-            const isRound1 = u.round === '1ER_CONTEO';
+      {/* Explanatory tip */}
+      <div className="p-3 rounded-xl bg-slate-950/70 border border-indigo-500/25 flex items-start gap-2.5 text-xs text-slate-300 leading-relaxed">
+        <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+        <p>
+          <strong>Avance Independiente:</strong> Los escaneos de cada terminal se clasifican en
+          tiempo real hacia su tabla de Excel en SharePoint según la ronda asignada a su tarjeta.
+        </p>
+      </div>
 
-            return (
+      {/* Shared-element Filter Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <Tabs
+          items={filterTabs}
+          value={filterRound}
+          onChange={setFilterRound}
+          layoutGroup="assignment-filter"
+        />
+        <span className="text-[11px] text-slate-400 font-mono tabular-nums">
+          Mostrando {visibleUsers.length} de 14 usuarios
+        </span>
+      </div>
+
+      {/* 14 User Cards Grid — single-level elevation, clean typography, generous spacing */}
+      <StaggerList className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+        {visibleUsers.map((u) => {
+          const isRound2 = u.round === '2DO_CONTEO';
+          const isRound3 = u.round === '3ER_CONTEO';
+          const isRound1 = u.round === '1ER_CONTEO';
+
+          return (
+            <StaggerItem key={u.userNum}>
               <div
-                key={u.userNum}
-                className={`p-4 rounded-2xl border flex flex-col justify-between transition-all shadow-sm ${
+                className={`h-full p-4 rounded-2xl border flex flex-col justify-between gap-3.5 transition-colors ${
                   isRound2
-                    ? 'bg-slate-950 border-blue-500/50 shadow-blue-500/10 ring-1 ring-blue-500/20'
+                    ? 'bg-slate-950/85 border-blue-500/50 shadow-md shadow-blue-950/20'
                     : isRound3
-                    ? 'bg-slate-950 border-amber-500/50 shadow-amber-500/10 ring-1 ring-amber-500/20'
-                    : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    ? 'bg-slate-950/85 border-amber-500/50 shadow-md shadow-amber-950/20'
+                    : 'bg-slate-950/85 border-slate-800/90 hover:border-slate-700'
                 }`}
               >
                 <div className="space-y-3">
-                  {/* Header: User Number Pill + Label + Round Badge */}
-                  <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-900">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-400 font-mono font-black text-xs flex items-center justify-center shrink-0">
+                  {/* Card Top: User ID + Round Badge */}
+                  <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-800/70">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/35 text-amber-400 font-mono font-black text-xs flex items-center justify-center shrink-0 tabular-nums">
                         {u.userNum}
-                      </div>
-                      <span className="font-mono font-bold text-sm text-white whitespace-nowrap">
+                      </span>
+                      <span className="font-mono font-bold text-sm text-white truncate">
                         {u.userLabel}
                       </span>
                     </div>
 
-                    {isRound1 && (
-                      <span className="px-2.5 py-1 rounded-md text-[10px] font-mono font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 whitespace-nowrap shadow-sm">
-                        1ER CONTEO
-                      </span>
-                    )}
-                    {isRound2 && (
-                      <span className="px-2.5 py-1 rounded-md text-[10px] font-mono font-bold bg-blue-950/80 text-blue-300 border border-blue-500/50 whitespace-nowrap shadow-sm">
-                        2DO CONTEO
-                      </span>
-                    )}
-                    {isRound3 && (
-                      <span className="px-2.5 py-1 rounded-md text-[10px] font-mono font-bold bg-amber-950/80 text-amber-300 border border-amber-500/50 whitespace-nowrap shadow-sm">
-                        3ER CONTEO
-                      </span>
-                    )}
+                    {isRound1 && <Badge tone="emerald">1ER CONTEO</Badge>}
+                    {isRound2 && <Badge tone="blue">2DO CONTEO</Badge>}
+                    {isRound3 && <Badge tone="amber">3ER CONTEO</Badge>}
                   </div>
 
-                  {/* Operator Name */}
-                  <div className="text-xs bg-slate-900/60 p-2.5 rounded-xl border border-slate-850 space-y-0.5">
-                    <span className="text-[10px] text-slate-400 block font-medium">Operador Asignado:</span>
-                    <div className="text-slate-200 font-bold text-xs truncate" title={u.operatorName}>
+                  {/* Operator Name — clean typography without extra boxed wrapper */}
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block">
+                      Operador Asignado
+                    </span>
+                    <div
+                      className={`text-xs font-bold truncate mt-0.5 ${
+                        u.operatorName === 'Sin operador asignado'
+                          ? 'text-slate-500 italic font-normal'
+                          : 'text-slate-100'
+                      }`}
+                      title={u.operatorName}
+                    >
                       {u.operatorName}
                     </div>
                   </div>
 
-                  {/* Stats 1er, 2do y 3er Conteo */}
-                  <div className="space-y-2 text-xs font-mono">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/80">
-                        <span className="text-slate-400 block text-[10px] font-sans">1er Conteo:</span>
-                        <span className="text-emerald-400 font-bold text-sm block mt-0.5">
-                          {u.round1Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
-                        </span>
-                        <span className="text-slate-500 block text-[10px] mt-0.5">{u.round1ScansCount} escaneos</span>
-                      </div>
-                      <div className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/80">
-                        <span className="text-slate-400 block text-[10px] font-sans">2do Conteo:</span>
-                        <span className="text-blue-400 font-bold text-sm block mt-0.5">
-                          {u.round2Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
-                        </span>
-                        <span className="text-slate-500 block text-[10px] mt-0.5">{u.round2ScansCount} escaneos</span>
-                      </div>
+                  {/* Clean Metric Grid (single-level) */}
+                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-800/60 font-mono">
+                    <div>
+                      <span className="text-[10px] font-sans text-slate-400 block">1er Conteo</span>
+                      <span className="text-sm font-extrabold text-emerald-400 tabular-nums">
+                        {u.round1Pieces.toLocaleString()}
+                      </span>
+                      <span className="text-[10px] text-slate-500 block tabular-nums">
+                        {u.round1ScansCount} QR
+                      </span>
                     </div>
-
-                    <div
-                      className={`px-2.5 py-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
-                        isRound3 || u.round3ScansCount > 0
-                          ? 'bg-amber-950/35 border-amber-500/40'
-                          : 'bg-slate-900/60 border-slate-800/70'
-                      }`}
-                    >
-                      <span className="text-[10px] font-sans text-slate-400 whitespace-nowrap">3er Conteo:</span>
-                      <div className="flex items-center gap-1.5 whitespace-nowrap">
-                        <span className="text-amber-400 font-bold text-xs">
-                          {u.round3Pieces.toLocaleString()} <span className="text-[10px] font-normal text-slate-400">pzs</span>
-                        </span>
-                        <span className="text-slate-600">•</span>
-                        <span className="text-slate-400 text-[10px]">{u.round3ScansCount} escaneos</span>
-                      </div>
+                    <div>
+                      <span className="text-[10px] font-sans text-slate-400 block">2do Conteo</span>
+                      <span className="text-sm font-extrabold text-blue-400 tabular-nums">
+                        {u.round2Pieces.toLocaleString()}
+                      </span>
+                      <span className="text-[10px] text-slate-500 block tabular-nums">
+                        {u.round2ScansCount} QR
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-sans text-slate-400 block">3er Conteo</span>
+                      <span className="text-sm font-extrabold text-amber-400 tabular-nums">
+                        {u.round3Pieces.toLocaleString()}
+                      </span>
+                      <span className="text-[10px] text-slate-500 block tabular-nums">
+                        {u.round3ScansCount} QR
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Action Buttons for this Individual User */}
-                <div className="space-y-2 pt-3 mt-3 border-t border-slate-900">
+                {/* Card Actions */}
+                <div className="space-y-2 pt-2.5 border-t border-slate-800/70">
                   {isRound1 && (
-                    <button
+                    <TactileButton
+                      anticipation
                       type="button"
                       onClick={() => handleAdvanceIndividual(u.userNum)}
-                      className="w-full min-h-[38px] px-3 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 active:scale-95 text-white flex items-center justify-center gap-1.5 transition-all shadow-md shadow-blue-600/20 whitespace-nowrap cursor-pointer"
-                      title={`Avanzar a ${u.userLabel} al 2do conteo individualmente`}
+                      className="w-full min-h-[38px] px-3 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-1.5 transition-colors shadow-md cursor-pointer"
                     >
                       <span>Avanzar a 2do Conteo</span>
                       <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-                    </button>
+                    </TactileButton>
                   )}
 
                   {isRound2 && (
                     <div className="space-y-2">
-                      <div className="w-full py-1.5 text-center text-[10px] font-mono font-bold text-blue-300 bg-blue-950/70 rounded-lg border border-blue-500/40 flex items-center justify-center gap-1.5 whitespace-nowrap">
+                      <div className="w-full py-1.5 text-center text-[10px] font-mono font-bold text-blue-300 bg-blue-950/60 rounded-lg border border-blue-500/35 flex items-center justify-center gap-1.5">
                         <UserCheck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                         <span>ESCANEANDO EN 2DO CONTEO</span>
                       </div>
-
                       <div className="grid grid-cols-2 gap-1.5">
                         <button
                           type="button"
                           onClick={() => handleRevertIndividual(u.userNum)}
-                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
-                          title="Regresar este usuario a 1er Conteo"
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <RotateCcw className="w-3 h-3 text-slate-400 shrink-0" />
                           <span>Regresar R1</span>
                         </button>
-
                         <button
                           type="button"
                           onClick={() => handleAdvanceToRound3(u.userNum)}
-                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-500/40 flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
-                          title="Pasar este usuario a 3er Conteo Extraordinario"
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-500/40 flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <span>Pasar R3</span>
                           <ArrowRight className="w-3 h-3 shrink-0" />
@@ -401,15 +344,14 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
 
                   {isRound3 && (
                     <div className="space-y-2">
-                      <div className="w-full py-1.5 text-center text-[10px] font-mono font-bold text-amber-300 bg-amber-950/70 rounded-lg border border-amber-500/40 whitespace-nowrap">
+                      <div className="w-full py-1.5 text-center text-[10px] font-mono font-bold text-amber-300 bg-amber-950/60 rounded-lg border border-amber-500/35">
                         EN 3ER CONTEO (DESEMPATE)
                       </div>
                       <div className="grid grid-cols-2 gap-1.5">
                         <button
                           type="button"
                           onClick={() => handleRevertIndividual(u.userNum)}
-                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
-                          title="Regresar este usuario a 1er Conteo"
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <RotateCcw className="w-3 h-3 text-slate-400 shrink-0" />
                           <span>Regresar R1</span>
@@ -417,8 +359,7 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                         <button
                           type="button"
                           onClick={() => handleAdvanceIndividual(u.userNum)}
-                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-blue-950/80 hover:bg-blue-900/80 text-blue-300 border border-blue-500/40 flex items-center justify-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
-                          title="Regresar este usuario a 2do Conteo"
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-blue-950/80 hover:bg-blue-900/80 text-blue-300 border border-blue-500/40 flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <RotateCcw className="w-3 h-3 text-blue-400 shrink-0" />
                           <span>Volver R2</span>
@@ -427,13 +368,11 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                     </div>
                   )}
 
-                  {/* Botón para forzar Re-login individual de este usuario (con confirmación Poka-Yoke) */}
                   {onResetUserDevice && (
                     <button
                       type="button"
                       onClick={() => setConfirmResetUserNum(u.userNum)}
-                      className="w-full px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/30 flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer"
-                      title={`Cerrar sesión remota de ${u.userLabel} y obligar a pedir nombre y usuario de nuevo en 1er conteo`}
+                      className="w-full px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/30 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                     >
                       <RotateCcw className="w-3 h-3 text-rose-400 shrink-0" />
                       <span>Pedir Usuario / Re-login</span>
@@ -441,64 +380,84 @@ export const GerenteUserAssignmentPanel: React.FC<GerenteUserAssignmentPanelProp
                   )}
                 </div>
               </div>
-            );
-          })}
-      </div>
+            </StaggerItem>
+          );
+        })}
+      </StaggerList>
 
-      {/* Modal de confirmación Poka-Yoke para Re-login individual */}
-      {confirmResetUserNum !== null && onResetUserDevice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-100">
-          <div className="bg-slate-900 border-2 border-amber-500 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative">
-            <button
-              type="button"
-              onClick={() => setConfirmResetUserNum(null)}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
+      {/* Poka-Yoke Individual Re-login Confirmation Modal */}
+      <AnimatePresence>
+        {confirmResetUserNum !== null && onResetUserDevice && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 12 }}
+              transition={{ duration: 0.2, ease: EASE_OUT_EXPO }}
+              className="glass-surface-strong border-2 border-amber-500/80 rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl space-y-4 text-left relative"
             >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-start gap-3">
-              <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
-                <RotateCcw className="w-6 h-6" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
-                  ¿Forzar re-login de Usuario {confirmResetUserNum}?
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  La terminal asignada al <strong>Usuario {confirmResetUserNum}</strong> cerrará su sesión actual, volverá al 1er Conteo y pedirá nombre y número de usuario nuevamente.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const target = confirmResetUserNum;
-                  setConfirmResetUserNum(null);
-                  soundManager.playWarning();
-                  onResetUserDevice(target);
-                  showFeedback(`⚡ Se envió orden de re-login a Usuario ${target}. Su terminal pedirá nombre y usuario.`);
-                }}
-                className="min-h-[44px] px-4 bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
-                autoFocus
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span>Sí, Forzar Re-login</span>
-              </button>
-
               <button
                 type="button"
                 onClick={() => setConfirmResetUserNum(null)}
-                className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl transition-all cursor-pointer"
+                className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 hover:bg-slate-700 cursor-pointer"
               >
-                Cancelar
+                <X className="w-4 h-4" />
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                  <RotateCcw className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
+                    ¿Forzar re-login de Usuario {confirmResetUserNum}?
+                  </h3>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    La terminal asignada al <strong>Usuario {confirmResetUserNum}</strong> cerrará su
+                    sesión actual, volverá al 1er Conteo y pedirá nombre y número de usuario
+                    nuevamente.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <TactileButton
+                  anticipation
+                  type="button"
+                  onClick={() => {
+                    const target = confirmResetUserNum;
+                    setConfirmResetUserNum(null);
+                    soundManager.playWarning();
+                    onResetUserDevice(target);
+                    toast({
+                      variant: 'warning',
+                      title: `Re-login enviado a Usuario ${target}`,
+                      description: 'Su terminal TC26 solicitará nombre y usuario nuevamente.',
+                    });
+                  }}
+                  className="min-h-[44px] px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm rounded-xl shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Sí, Forzar Re-login</span>
+                </TactileButton>
+
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetUserNum(null)}
+                  className="min-h-[44px] px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs sm:text-sm rounded-xl cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
   );
 };
